@@ -1,0 +1,5 @@
+#!/bin/bash
+# Run a python snippet/script in the analysis container with the project mounted at /work.
+# Portable: resolves the project dir (mt1939/) relative to this script.
+PROJ="$(cd "$(dirname "$0")/.." && pwd)"
+exec docker run --rm -i -v "$PROJ:/work" -w /work -e PYTHONPATH=/work/re mt1939-re python "$@"

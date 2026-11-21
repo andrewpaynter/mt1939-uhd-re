@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# --- NOT distributed in this public repo (kept locally only) ---
+
+# Firmware dumps: LG copyright. Dump your own drive here.
+mt1939/dumps/
+
+# Drive captures (DRAM / internal event-log binaries): drive-specific.
+mt1939/logs/
+
+# Build artifacts (reproducible from re/buildpatch.py)
+mt1939/out/
+
+# Private lab notebook (contains working/operational detail); the public
+# technical summary is FINDINGS.md.
+MT1939-UHD-PROJECT.md
+
+# Superseded local backups (git history is the record)
+*.bak-*

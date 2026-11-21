@@ -1,0 +1,276 @@
+  ?? key=0x00000703 val=0x000a2003
+  ?? key=0x00000712 val=0x0009fb7b
+  28 READ(10)         -> code 0x000000
+  a8 READ(12)         -> code 0x000000
+  be READ CD          -> code 0x000000
+  d5 ?                -> code 0x000000
+  b9 READ CD MSF      -> code 0x000000
+  25 READ CAPACITY    -> code 0x000000
+  43 READ TOC         -> code 0x000000
+  2b SEEK             -> code 0x000000
+  bb SET CD SPEED     -> code 0x0a2467
+  4b PAUSE/RESUME     -> code 0x000000
+  45 PLAY AUDIO10     -> code 0x000000
+  a5 PLAY AUDIO12     -> code 0x000000
+  47 PLAY MSF         -> code 0x000000
+  4e STOP PLAY        -> code 0x000000
+  44 READ HEADER      -> code 0x000000
+  42 READ SUBCHAN     -> code 0x000000
+  ad READ DISC STRUCT -> code 0x155413
+  ?? key=0x000007a4 val=0x000a405d
+  ?? key=0x000007a3 val=0x000a40b5
+  a7 SET RD AHEAD     -> code 0x000000
+  a1 BLANK            -> code 0x000000
+  f9 ?                -> code 0x000000
+  5b CLOSE TRACK      -> code 0x000000
+  35 SYNC CACHE       -> code 0x000000
+  04 FORMAT UNIT      -> code 0x000000
+  3c READ BUFFER      -> flag1 0x0a0e4d
+  5c READ BUF CAP     -> flag1 0x0a1fdd
+  51 READ DISC INFO   -> code 0x000000
+  23 READ FMT CAP     -> flag1 0x0a1f47
+  52 READ TRACK INFO  -> code 0x000000
+  53 RESERVE TRACK    -> code 0x000000
+  5d SEND CUE         -> code 0x000000
+  bf SEND DISC STRUCT -> code 0x000000
+  54 SEND OPC         -> flag9 0x052000
+  2a WRITE(10)        -> code 0x000000
+  aa WRITE(12)        -> code 0x000000
+  2e WRITE+VERIFY     -> code 0x000000
+  2f VERIFY           -> code 0x000000
+  3b WRITE BUFFER     -> flag1 0x0a2ed5
+  ?? key=0x00008046 val=0x0009e079
+  ?? key=0x0000074a val=0x0009e6f3
+  ac GET PERF         -> flag1 0x09ec6f
+  b6 SET STREAMING    -> code 0x0a27a7
+  bd MECH STATUS      -> flag1 0x09fbc1
+  55 MODE SELECT      -> flag1 0x0a0137
+  5a MODE SENSE       -> flag1 0x0a0b61
+  1e PREVENT ALLOW    -> flag1 0x0a0da1
+  ?? key=0x0000071d val=0x0014726b
+  a2 SEND EVENT       -> flag1 0x0a23dd
+  1b START STOP       -> flag1 0x0a2a59
+  00 TEST UNIT READY  -> code 0x0a2ed3
+  ab READ MEDIA SN    -> code 0x0a36cf
+  f3 ?                -> code 0x000000
+  ?? key=0x000080f1 val=0x00144b29
+  ?? key=0x000080f7 val=0x00145cd7
+  ?? key=0x000087f5 val=0x00185a33
+  ?? key=0x000087f8 val=0x00185fcb
+  f6 ?                -> code 0x186065
+  fe ?                -> flag1 0x0a9e41
+  d4 ?                -> code 0x145af5
+  ?? key=0x000080e7 val=0x001471bf
+  ?? key=0x000080f0 val=0x00145f55
+  ?? key=0x000080fa val=0x000a40fd
+  ?? key=0x000080fc val=0x000a4153
+  eb ?                -> code 0x0a0df9
+  ?? key=0x00000300 val=0x00000000
+  28 READ(10)         -> code 0x19a08d
+  a8 READ(12)         -> code 0x19a08d
+  be READ CD          -> code 0x17126b
+  d5 ?                -> code 0x171487
+  b9 READ CD MSF      -> code 0x171487
+  25 READ CAPACITY    -> code 0x17105d
+  43 READ TOC         -> code 0x172577
+  2b SEEK             -> code 0x17267d
+  ad READ DISC STRUCT -> code 0x172e93
+  4b PAUSE/RESUME     -> code 0x170de9
+  45 PLAY AUDIO10     -> code 0x170e05
+  a5 PLAY AUDIO12     -> code 0x170e05
+  47 PLAY MSF         -> code 0x170eef
+  4e STOP PLAY        -> code 0x171041
+  44 READ HEADER      -> code 0x1716d7
+  42 READ SUBCHAN     -> code 0x171b69
+  a7 SET RD AHEAD     -> REFUSE 05/30/02 cannot read: incompatible format
+  a1 BLANK            -> code 0x17694d
+  f9 ?                -> code 0x1773bb
+  5b CLOSE TRACK      -> code 0x176eab
+  35 SYNC CACHE       -> code 0x17779b
+  04 FORMAT UNIT      -> code 0x1777b7
+  23 READ FMT CAP     -> flag1 0x177bc7
+  51 READ DISC INFO   -> code 0x17965f
+  52 READ TRACK INFO  -> code 0x177d77
+  53 RESERVE TRACK    -> code 0x178153
+  5d SEND CUE         -> code 0x1782df
+  bf SEND DISC STRUCT -> REFUSE 05/20/00 invalid opcode
+  54 SEND OPC         -> flag1 0x1786e7
+  2a WRITE(10)        -> code 0x178755
+  aa WRITE(12)        -> code 0x178755
+  2e WRITE+VERIFY     -> code 0x178755
+  2f VERIFY           -> code 0x174987
+  f3 ?                -> code 0x172ad5
+
+=== table @0x1a62cc  parent/ptr=0x1a5f9c
+  28 READ(10)         -> code 0x1542a1
+  a8 READ(12)         -> code 0x1542a1
+  be READ CD          -> code 0x1542a1
+  d5 ?                -> REFUSE 05/30/02 cannot read: incompatible format
+  b9 READ CD MSF      -> REFUSE 05/30/02 cannot read: incompatible format
+  25 READ CAPACITY    -> code 0x1548f3
+  43 READ TOC         -> code 0x155a43
+  2b SEEK             -> code 0x1545db
+  4b PAUSE/RESUME     -> REFUSE 05/30/02 cannot read: incompatible format
+  45 PLAY AUDIO10     -> REFUSE 05/30/02 cannot read: incompatible format
+  a5 PLAY AUDIO12     -> REFUSE 05/30/02 cannot read: incompatible format
+  47 PLAY MSF         -> REFUSE 05/30/02 cannot read: incompatible format
+  4e STOP PLAY        -> REFUSE 05/30/02 cannot read: incompatible format
+  44 READ HEADER      -> REFUSE 05/30/02 cannot read: incompatible format
+  42 READ SUBCHAN     -> REFUSE 05/30/02 cannot read: incompatible format
+  5d SEND CUE         -> REFUSE 05/20/00 invalid opcode
+  ad READ DISC STRUCT -> code 0x155413
+  a7 SET RD AHEAD     -> code 0x1566e5
+  a1 BLANK            -> REFUSE 05/30/06 cannot format: incompatible medium
+  f9 ?                -> code 0x159719
+  51 READ DISC INFO   -> code 0x154a89
+  23 READ FMT CAP     -> flag1 0x1554db
+  52 READ TRACK INFO  -> code 0x155b33
+  2f VERIFY           -> code 0x15454b
+  5b CLOSE TRACK      -> REFUSE 05/20/00 invalid opcode
+  35 SYNC CACHE       -> REFUSE 0x0
+  04 FORMAT UNIT      -> REFUSE 05/30/06 cannot format: incompatible medium
+  53 RESERVE TRACK    -> REFUSE 05/20/00 invalid opcode
+  bf SEND DISC STRUCT -> REFUSE 05/20/00 invalid opcode
+  54 SEND OPC         -> flag9 0x052000
+  2a WRITE(10)        -> REFUSE 05/30/06 cannot format: incompatible medium
+  aa WRITE(12)        -> REFUSE 05/30/06 cannot format: incompatible medium
+  2e WRITE+VERIFY     -> REFUSE 05/30/06 cannot format: incompatible medium
+  f3 ?                -> code 0x156ab7
+
+=== table @0x1a63e4  parent/ptr=0x1a5f9c
+  2a WRITE(10)        -> code 0x161549
+  aa WRITE(12)        -> code 0x161549
+  ad READ DISC STRUCT -> code 0x15fa9f
+  a1 BLANK            -> code 0x15d43d
+  5b CLOSE TRACK      -> code 0x15d90d
+  35 SYNC CACHE       -> code 0x15e641
+  04 FORMAT UNIT      -> code 0x15e643
+  51 READ DISC INFO   -> code 0x15eadd
+  23 READ FMT CAP     -> flag1 0x15fb9d
+  52 READ TRACK INFO  -> code 0x15fe6f
+  53 RESERVE TRACK    -> code 0x16032b
+  bf SEND DISC STRUCT -> code 0x161457
+  54 SEND OPC         -> flag1 0x1614d3
+
+=== table @0x1a6454  parent/ptr=0x1a62d4
+  ad READ DISC STRUCT -> code 0x1683c1
+  a1 BLANK            -> code 0x166edd
+  35 SYNC CACHE       -> code 0x1676a7
+  5b CLOSE TRACK      -> code 0x166eeb
+  04 FORMAT UNIT      -> code 0x167799
+  51 READ DISC INFO   -> code 0x167a13
+  23 READ FMT CAP     -> flag1 0x168579
+  52 READ TRACK INFO  -> code 0x1686c9
+  53 RESERVE TRACK    -> code 0x168a3d
+  bf SEND DISC STRUCT -> code 0x168f39
+  54 SEND OPC         -> flag1 0x168f59
+  2a WRITE(10)        -> code 0x168fc5
+  aa WRITE(12)        -> code 0x168fc5
+  2e WRITE+VERIFY     -> code 0x168fc5
+
+=== table @0x1a64cc  parent/ptr=0x1a62d4
+  ad READ DISC STRUCT -> code 0x16c913
+  35 SYNC CACHE       -> code 0x16df07
+  04 FORMAT UNIT      -> code 0x16cf0f
+  23 READ FMT CAP     -> flag1 0x16c2f5
+  bf SEND DISC STRUCT -> code 0x16ded9
+  54 SEND OPC         -> flag1 0x16d3e1
+  2a WRITE(10)        -> code 0x19ec2f
+  aa WRITE(12)        -> code 0x19ec2f
+  2e WRITE+VERIFY     -> code 0x19ec2f
+  2f VERIFY           -> code 0x16d501
+  5b CLOSE TRACK      -> REFUSE 05/20/00 invalid opcode
+  53 RESERVE TRACK    -> REFUSE 05/20/00 invalid opcode
+  a1 BLANK            -> REFUSE 05/30/05 cannot write: incompatible format
+
+=== table @0x1a653c  parent/ptr=0x1a62d4
+  28 READ(10)         -> code 0x0b47a9
+  a8 READ(12)         -> code 0x0b47a9
+  be READ CD          -> REFUSE 05/30/02 cannot read: incompatible format
+  d5 ?                -> REFUSE 05/30/02 cannot read: incompatible format
+  b9 READ CD MSF      -> REFUSE 05/30/02 cannot read: incompatible format
+  25 READ CAPACITY    -> code 0x0b52ab
+  43 READ TOC         -> code 0x0b6ced
+  2b SEEK             -> code 0x0b50e5
+  4b PAUSE/RESUME     -> REFUSE 05/30/02 cannot read: incompatible format
+  45 PLAY AUDIO10     -> REFUSE 05/30/02 cannot read: incompatible format
+  a5 PLAY AUDIO12     -> REFUSE 05/30/02 cannot read: incompatible format
+  47 PLAY MSF         -> REFUSE 05/30/02 cannot read: incompatible format
+  4e STOP PLAY        -> REFUSE 05/30/02 cannot read: incompatible format
+  44 READ HEADER      -> REFUSE 05/30/02 cannot read: incompatible format
+  42 READ SUBCHAN     -> REFUSE 05/30/02 cannot read: incompatible format
+  5d SEND CUE         -> REFUSE 05/20/00 invalid opcode
+  ad READ DISC STRUCT -> code 0x0b676f
+  a7 SET RD AHEAD     -> code 0x0b6e01
+  a1 BLANK            -> code 0x14ae9d
+  f9 ?                -> code 0x14aeab
+  5b CLOSE TRACK      -> code 0x14e0b3
+  35 SYNC CACHE       -> code 0x14b063
+  04 FORMAT UNIT      -> code 0x14b4d9
+  51 READ DISC INFO   -> code 0x0b59b5
+  23 READ FMT CAP     -> flag1 0x14c58b
+  52 READ TRACK INFO  -> code 0x0b8029
+  53 RESERVE TRACK    -> code 0x14e485
+  bf SEND DISC STRUCT -> code 0x14d1ff
+  54 SEND OPC         -> flag1 0x14d337
+  2a WRITE(10)        -> code 0x14d7eb
+  aa WRITE(12)        -> code 0x14d7eb
+  2e WRITE+VERIFY     -> code 0x14d7eb
+  f3 ?                -> code 0x0b75e3
+  2f VERIFY           -> code 0x0b49d5
+  ea ?                -> code 0x14d23f
+
+=== table @0x1a665c  parent/ptr=0x1a5f9c
+  51 READ DISC INFO   -> code 0x0b557d
+  52 READ TRACK INFO  -> code 0x0b81bb
+
+=== table @0x1a6674  parent/ptr=0x1a6544
+  ?? key=0x000007e1 val=0x001444a5
+  ?? key=0x000007a1 val=0x001443f1
+  ?? key=0x000007ef val=0x001444f9
+  ?? key=0x000007e6 val=0x001444c3
+  ?? key=0x000007e0 val=0x0014447f
+  ?? key=0x000007e7 val=0x001444eb
+  ?? key=0x0000072f val=0x00144abb
+  ?? key=0x00000300 val=0x00000000
+  ?? key=0x000000a5 val=0x000000a9
+  ?? key=0x000000a6 val=0x000000f3
+  ?? key=0x000000f3 val=0x00000000
+  ?? key=0x00001000 val=0x00002800
+  ?? key=0x00003000 val=0x00004000
+  ?? key=0x00005000 val=0x00007000
+  ?? key=0x00007800 val=0x18001000
+  ?? key=0x10000800 val=0x20001000
+  ?? key=0x08000800 val=0x5f474f4c
+  ?? key=0x3a4b4553 val=0x5f474f4c
+  ?? key=0x3a4a4441 val=0x5f474f4c
+  ?? key=0x3a444d43 val=0x5f474f4c
+  ?? key=0x3a434e45 val=0x5f474f4c
+  ?? key=0x3a434544 val=0x5f474f4c
+  ?? key=0x3a435041 val=0x5f474f4c
+  ?? key=0x3a435741 val=0x5f474f4c
+  ?? key=0x3a445053 val=0x534f444c
+  ?? key=0x434c0000 val=0x00005244
+  ?? key=0x5752434c val=0x434c0000
+  ?? key=0x00004d52 val=0x4d41524c
+  ?? key=0x444c0000 val=0x00005350
+  ?? key=0x534d444c val=0x444c0000
+  ?? key=0x00005750 val=0x574d444c
+  ?? key=0x444c0000 val=0x00004450
+  ?? key=0x444d444c val=0x424c0000
+  ?? key=0x0000534f val=0x444f424c
+  ?? key=0x424c0000 val=0x00005352
+  ?? key=0x4452424c val=0x424c0000
+  ?? key=0x00004445 val=0x444f444c
+  ?? key=0x424c0000 val=0x00005345
+  ?? key=0x5452424c val=0x424c0000
+  ?? key=0x00005152 val=0x5445424c
+  ?? key=0x01030000 val=0x64006402
+  ?? key=0x64050964 val=0x0b0c0407
+  ?? key=0x120d640e val=0x0414640f
+  ?? key=0x40443424 val=0x686e6066
+  ?? key=0xc4517870 val=0xe0ece4c0
+  ?? key=0xf8f0f4e8 val=0x522d4442
+  ?? key=0x57202045 val=0x4e363148
+  ?? key=0x20303453 val=0x30343730
+  ?? key=0x0030302d val=0x42414e45
