@@ -47,6 +47,20 @@ The decoder, disc-info read, and per-media SCSI command tables already route `C8
 
 Even with all of the above, **a hardware SPI programmer as a last-resort recovery path, plus a verified known-good backup, are prerequisites before any write is ever attempted.** This repo does not provide flashing instructions.
 
+## Open questions & limitations
+
+This is an incomplete, unverified research effort. Known limitations, most important first:
+
+- **Nothing has been flashed or tested on hardware.** "Passes the integrity check" means a drive would *accept and boot* the image — it is **not** evidence that UHD reading works, or that the image is safe. The patch could fail to help, or misbehave in ways that only appear on a real disc.
+- **Assumption B — reflectivity threshold (needs a disc).** The candidate patch reuses the drive's dual-layer "pressed vs. recordable" threshold (ratio `< 0.76`) for 3-layer discs. Whether that threshold correctly separates pressed from recordable *triple*-layer media is unverified.
+- **Assumption C — the dual-only "long tail" (needs a disc).** After identification succeeds, the type byte is read in many places; a number of secondary handlers branch on dual-vs-single (`C4`/`C0`) with **no triple (`C8`) case** and would take a default/else path. Whether any of these mishandle a `C8` disc (e.g. wrong capacity or 2-layer read geometry on 3 layers) can only be found with the disc. Some sites already handle `C8`; this was not exhaustively enumerated.
+- **Pre-flash engineering unknowns (static work still to do before any write would be responsible):**
+  - The purpose of the "update signatures" region at image `0x105C0–0x1060F` — whether it is a second gate the updater checks (beyond the CMAC table).
+  - Instruction-level confirmation of the boot-block recovery handler, to be certain a bad main-firmware flash is recoverable over the cable.
+  - The exact flash erase/commit step in the programmer routine.
+- **Assumption A is only *largely* cleared.** Static analysis shows the reflectivity-measurement routine populates the right buffer and natively measures 3-layer discs, but whether it needs a specific layer pre-focused by the normal ID sequence is a minor residual that is untestable without a disc.
+- **Scope.** This work is about disc *identification* only. It does nothing about AACS/decryption, and it has not been validated end-to-end to actually rip a UHD disc.
+
 ## Method & tooling
 
 Static reverse engineering with Capstone in a container (`re/Dockerfile`); helpers in `mt1939/re/` (`fw.py` disassembly/search, `cmac.py` integrity, `segtable.py` table parser, `buildpatch.py` the candidate image). The drive's internal event log was read read-only via vendor SCSI `READ BUFFER` commands to confirm the identification sequence.
