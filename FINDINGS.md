@@ -37,7 +37,7 @@ Because only the shortcut path reaches identification with a 3-layer provisional
 
 The decoder, disc-info read, and per-media SCSI command tables already route `C8` like `C4` once the type byte is set, so no further edits are needed for the common case. The resulting image is re-signed (`re/cmac.py::resign`) and **passes all four CMAC records** — meaning a drive would *accept and boot* it.
 
-**"Integrity OK" is not "it works."** Whether the patch actually enables UHD reads is **unverified** and rests on assumptions that can only be checked by flashing (whether the reflectivity measurement is valid on this path; whether the dual-layer threshold suits a triple-layer disc; and a "long tail" of other code paths that branch on dual-vs-single with no triple case). **This project has not flashed anything.**
+**"Integrity OK" is not "it works."** Whether the patch actually enables UHD reads is **unverified** and can only be confirmed by flashing. Static analysis has cleared the main concern — the reflectivity-measurement routine the patch calls (`0x102B52`) provably populates the buffer the pressed-test reads and already measures 3-layer discs natively — but two assumptions remain checkable only on hardware: whether the dual-layer reflectivity threshold suits a triple-layer disc, and a "long tail" of other code paths that branch on dual-vs-single with no triple case. **This project has not flashed anything.**
 
 ## 4. Update & recovery mechanics
 

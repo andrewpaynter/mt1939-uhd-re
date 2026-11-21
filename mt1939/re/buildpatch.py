@@ -19,13 +19,15 @@ Patch strategy (cleaner than the doc's paper P1+P2 — leaves 0x134C9E untouched
   This reuses the drive's real reflectivity test (correct measurement + threshold)
   instead of reimplementing it, and preserves recordable BDXL by construction.
 
-OPEN ASSUMPTIONS (untestable without a disc; flagged for review):
-  A. 0x102B52 populates 0x01FFA2F4 correctly when called on the shortcut path
-     (the doc marked this [?]). Build BOTH variants via CALL_102B52 to compare.
-  B. The dual threshold 0.76 (0x3F428F5C) is acceptable for a 3-layer disc
-     (doc said "start with 0.76").
-  C. The §4 "long tail" of dual-only (C4) code paths after ID may still mishandle
-     C8 — only testable with the disc.
+OPEN ASSUMPTIONS:
+  A. [LARGELY RESOLVED, static] 0x102B52 writes the reflectivity buffer 0x01FFA2F4
+     (verified at 0x102C44-54) and natively measures 3-layer discs (per-layer slots
+     at 0x102C5C+). It has two callers and takes no args, so the standalone call here
+     is sound; calling it while type is still E8 measures triple reflectivity, then
+     we remap to F4 for the pressed test. Minor residual: whether a specific layer
+     must be pre-focused (untestable without a disc). CALL_102B52=True recommended.
+  B. [untestable w/o disc] The dual threshold 0.76 (0x3F428F5C) suiting a 3-layer disc.
+  C. [untestable w/o disc] The "long tail" of dual-only (C4) code paths after ID.
 
 Run:  re/run re/buildpatch.py       (writes out/patched.bin, verifies CMAC, disasm)
 """
