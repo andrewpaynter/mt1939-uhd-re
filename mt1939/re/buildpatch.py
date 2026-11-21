@@ -54,6 +54,12 @@ CALL_102B52 = True         # assumption A; set False for the no-prep variant
 # Kept as a documented experiment. Default off -> the default build is the
 # classification fix (v1), which IS validated on hardware. See FINDINGS.md §5.
 BIT18       = False        # True rebuilds the refuted bit-18 variant (patched-v2.bin)
+# v3a experiment (2026-11-21, MT1959 comparison): type assigned to a PRESSED 3-layer disc.
+#   0xC8 = v1/v2 behaviour (BDXL-TL / 33.4 GB-per-layer config everywhere, incl. the inner zone).
+#   0xC4 = v3a: treat it as a standard dual-layer BD-ROM, which approximates MT1959's UHD
+#          "inner-zone mode" (flag 0x02000B17=1: standard-BD config, 27 GB density row, DL-style
+#          addressing) for the DI read. Diagnostic only: tests whether the DI read succeeds (log 11bb).
+PRESSED_TL_TYPE = 0xC8
 HOOK2_SITE  = 0xB9FF8      # `bl 0x46c0a` in the ROM read 0xB9FB0, after r0=0x30000
 NEWCODE2    = 0x1A9C60     # second free-space routine (after NEWCODE's 64 B; still FF, in rec2)
 F_46C0A     = 0x46C0A      # writes r0 -> servo reg 0x04030020
@@ -124,7 +130,7 @@ def build_newcode():
     a.ldrb_imm(0, 1, 0); a.ldrb_imm(2, 1, 1); a.lsls_imm(2, 2, 8); a.orrs(0, 2)  # r0 = b1<<8|b0
     a.bl(F_134C9E)                        # run dual pressed-test
     a.ldr_lit(1, TYPE_ADDR); a.ldrb_imm(0, 1); a.cmp_imm(0, 0xC4); a.bne("rec")
-    a.movs_imm(0, 0xC8); a.strb_imm(0, 1); a.b("done")   # pressed -> C8
+    a.movs_imm(0, PRESSED_TL_TYPE); a.strb_imm(0, 1); a.b("done")   # pressed -> C8 (v3a: C4)
     a.label("rec"); a.movs_imm(0, 0xE8); a.strb_imm(0, 1)  # recordable -> restore E8
     a.label("done"); a.bl(F_10A10A); a.pop_pc()          # original decode + return
     return a.finish()
@@ -181,7 +187,7 @@ def main():
     # write out
     outdir = os.path.join(os.path.dirname(DUMP), "..", "out"); outdir = os.path.abspath(outdir)
     os.makedirs(outdir, exist_ok=True)
-    outp = os.path.join(outdir, "patched-v2.bin" if BIT18 else "patched.bin")
+    outp = os.path.join(outdir, "patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin"))
     open(outp, "wb").write(signed)
     print("wrote", outp, len(signed), "bytes; CALL_102B52 =", CALL_102B52, "BIT18 =", BIT18)
     # disassemble patched regions for review

@@ -38,7 +38,7 @@ CACHE = "/work/scratch/xmatch_" + os.path.basename(os.environ.get("FWB", "mt1959
 def indexB():
     if os.path.exists(CACHE): return pickle.load(open(CACHE, "rb"))
     s = []
-    for lo, hi in ([(0x10000, 0x1d0000)] if os.environ.get("FWB", "").endswith("dumpA_0-2M.bin") else [(0x10000, 0x15c000), (0x1b0000, 0x1c8000)]): s += stream(B, lo, hi)
+    for lo, hi in ([(0x10000, 0x1d0000)] if os.environ.get("FWB", "").endswith("dumpA_0-2M.bin") else [(0x10000, 0x15c000), (0x1b0000, 0x1c8000)] + ([(0x01F78000, 0x01F78000 + 0x727dc)] if len(B) > 0x1000000 else [])): s += stream(B, lo, hi)
     idx = collections.defaultdict(list)
     for i in range(len(s) - N):
         idx["\x1f".join(t for _, t in s[i:i + N])].append(i)
