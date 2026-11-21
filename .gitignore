@@ -22,3 +22,11 @@ MT1939-UHD-PROJECT.md
 
 # local flash operations (firmware images + plan) - not public
 mt1939/flash-kit/
+
+# MT1959 vendor firmware (LG copyright) extracted from official LG updaters - analysis only, NEVER flash to the MT1939 drive
+mt1939/mt1959/
+
+# analysis caches / firmware disassembly listings (large, and contain firmware code) - local only
+mt1939/scratch/*.pkl
+mt1939/scratch/*.txt
+mt1939/scratch/*.json

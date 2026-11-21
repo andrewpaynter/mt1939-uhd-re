@@ -1,7 +1,9 @@
 """Helpers for poking at the MT1939 WH16NS40 1.00 firmware dump (flash offset == CPU address assumed)."""
-import struct, re, sys
+import struct, re, sys, os
 from capstone import Cs, CS_ARCH_ARM, CS_MODE_ARM, CS_MODE_THUMB
-FW = open("/work/dumps/dumpA_0-2M.bin", "rb").read()
+# FWIMG selects another image (e.g. FWIMG=/work/mt1959/WH16NS60_1.01_stock.bin for the MT1959 comparison).
+FWIMG = os.environ.get("FWIMG", "/work/dumps/dumpA_0-2M.bin")
+FW = open(FWIMG, "rb").read()
 _arm = Cs(CS_ARCH_ARM, CS_MODE_ARM); _thumb = Cs(CS_ARCH_ARM, CS_MODE_THUMB)
 for c in (_arm, _thumb): c.detail = False
 
