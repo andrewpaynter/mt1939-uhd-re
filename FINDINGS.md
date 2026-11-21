@@ -1,72 +1,87 @@
 # MT1939 UHD Findings
 
-A technical summary of why an LG WH16NS40 (MediaTek **MT1939** controller, firmware 1.00) refuses 4K Ultra HD Blu-ray discs, and what a firmware fix would involve. All analysis is **static** against a 2 MB firmware image dumped from the drive (read-only); **nothing here was flashed or tested on hardware.** See the [WARNING in the README](README.md) before doing anything with this.
+A technical account of reverse-engineering why an LG WH16NS40 (MediaTek **MT1939** controller, firmware 1.00) refuses 4K Ultra HD Blu-ray discs — and how far that refusal can be pushed back. This includes a firmware patch that was **built, flashed, and run on real hardware** (fully recoverable), which fixes the drive's disc *classification*, plus a precise identification of the one remaining wall.
 
-> Addresses below are flash/CPU offsets in the 2 MB image (code runs execute-in-place, so file offset = CPU address). The controller is 32-bit ARM, mostly Thumb.
+The short version: the common wisdom is "MT1939 can't do UHD, nobody knows why." We now know why — in instrumented detail — and we proved on hardware that a big part of it is a *firmware* decision, not a hardware one.
 
-## 1. Root cause: a firmware disc-identification bug, not a hardware limit
+> Addresses below are flash/CPU offsets in the 2 MB firmware image (code runs execute-in-place, so file offset = CPU address). The controller is 32-bit ARM, mostly Thumb. All static analysis is read-only against a dump from the drive; the one hardware write (the firmware flash) is described in §4 and was fully recoverable. **See the [WARNING in the README](README.md) before doing anything with this.**
 
-The drive physically measures a UHD disc's three data layers correctly. The failure is in how the firmware **classifies** the disc:
+## 1. Root cause: a firmware disc-identification bug
 
-- A provisional type is assigned purely from the measured **layer count** (voting classifier `0x1326E2`): 3 layers → **E8** ("BD-R XL triple layer"), as for *any* 3-layer disc.
-- At **`0x68F96`** a **BDXL shortcut** fires: for any disc with `(type & 0xC8) == 0xC8` (i.e. ≥3 layers) it jumps **straight to the recordable-style disc-ID decoder `0x10A10A`**, **skipping the pressed-vs-recordable test `0x134C9E`** that single/dual-layer discs go through.
-- That pressed test (`0x134C9E`) computes a reflectivity ratio and, below a threshold, reclassifies a disc as **pressed** (BD-ROM: `C0` single, `C4` dual). It has **no triple-layer (`C8`) case** at all, and the caller only lets `F0`/`F4` reach it.
-- So a pressed 3-layer BD-ROM (a UHD "BD-100") stays typed **E8** and is read the **recordable** way — seeking disc-info by wobble/ADIP addresses a pressed disc doesn't have. Result: seek failures, ~3,000 retries, and a final SCSI sense **`02/30/00` "incompatible medium."**
+The drive physically measures a UHD disc's three data layers correctly. The refusal is in how the firmware **classifies** the disc:
 
-**This was confirmed by capturing the drive's own internal event log** (a 128 KB DRAM ring) for a working disc vs. a UHD disc and diffing them event-by-event. The working disc logs the pressed test (`1a76`), takes the ROM read path, and identifies fine; the UHD disc logs the shortcut (`0ddd`), never runs the pressed test, and dies in seek retries.
+- A provisional type is assigned from the measured **layer count** (voting classifier `0x1326E2`): 3 layers → **E8** ("BD-R XL triple layer"), as for *any* 3-layer disc.
+- At **`0x68F96`** a **BDXL shortcut** fires: for any disc with `(type & 0xC8) == 0xC8` (≥3 layers) it jumps **straight to the recordable-style disc-ID decoder `0x10A10A`**, **skipping the pressed-vs-recordable test `0x134C9E`** that single/dual-layer discs go through.
+- That pressed test computes a reflectivity ratio and reclassifies a disc as **pressed** (BD-ROM: `C0` single, `C4` dual) — but it has **no triple-layer (`C8`) case**, and its caller only lets `F0`/`F4` reach it.
+- So a pressed 3-layer BD-ROM (a UHD "BD-100") stays typed **E8** and is read the **recordable** way — seeking disc-info by wobble/ADIP addresses a pressed disc doesn't have. Result: seek failures, retries, and SCSI sense **`02/30/00` "incompatible medium."**
 
-Nothing in this path points to a missing hardware capability — the optics/servo handle the three high-density layers (the drive writes 100 GB BDXL with the same layer count and density). It is three gaps in the **identification logic**.
+This was confirmed by capturing the drive's own 128 KB internal event-log ring and diffing a working disc against a UHD disc, event by event.
 
-## 2. Firmware integrity = AES-128-CMAC (public key)
+## 2. Firmware integrity = AES-128-CMAC (and how we can re-sign)
 
-Each firmware segment is protected by a 128-bit digest, verified by a hardware engine at register block `0x04063000` during a firmware update **and re-checked at every boot** by the boot block. The digests live in a table at image offset **`0x10400`** (16 entries × 28 bytes: `{enabled, start, end, 16-byte digest}`).
+Each firmware segment is protected by a 128-bit digest the drive verifies in hardware (register block `0x04063000`) during an update **and re-checks at every boot**. The digests live in a table at image offset **`0x10400`** (16 entries × 28 bytes: `{enabled, start, end, 16-byte digest}`).
 
-The algorithm is **AES-128-CMAC** (RFC 4493, zero IV) under a **public, fixed integrity key** — not a secret, not an AACS key, shared across MT1939/MT1959 firmware. Because the key is public, the digests can be **regenerated**, so a modified image can be made acceptable to the drive.
+The algorithm is **AES-128-CMAC** (RFC 4493, zero IV) under a **public, fixed integrity key** — not a secret, not an AACS key. The per-segment input is `image[start..=end]` with each 16-byte block byte-reversed, and the output digest byte-reversed before storage. This scheme was identified from the community crate [`mediatek-optical`](https://github.com/MattJackson/mediatek-optical) and then **independently re-verified** here — `re/cmac.py` reproduces all four stored digests exactly and can **re-sign** a modified image so the drive accepts it. This is what makes patching the firmware possible at all.
 
-This scheme was **identified from the community crate [`mediatek-optical`](https://github.com/MattJackson/mediatek-optical) by MattJackson** (`src/envelope/image/cmac.rs`) and then **independently re-verified here** — `re/cmac.py` reproduces all four stored digests of a real dump exactly. The per-segment input is `image[start..=end]` with each 16-byte block byte-reversed, and the output digest is byte-reversed before storage.
+## 3. The classification fix (a small firmware patch)
 
-Mapping this onto our own dump also matched every structural clue found by disassembly (16-byte blocks, 128-bit running state, a distinct last-block finalize = CMAC's K1 step, an AES-128 core whose key register at engine `+0x40` is written only by unrelated decryption code — hence no key-load in the hash path). An earlier conclusion in the lab notes — that the digest was "probably a silicon-locked custom hash, not recoverable statically" — was **wrong**; it had only tried a *zero* key and per-*word* byte swaps.
+Because only the shortcut path reaches identification with a 3-layer provisional type, a single hook suffices. `re/buildpatch.py` produces an image that:
 
-## 3. A candidate fix (designed + assembled, UNTESTED)
-
-Because only the shortcut path reaches identification with a 3-layer provisional type, a single hook suffices. `re/buildpatch.py` produces a candidate image that:
-
-- replaces the `bl 0x10A10A` at **`0x68FB2`** with a call to a ~64-byte routine placed in verified free space (`0x1A9C00`);
-- the routine temporarily sets the type to `F4`, runs the drive's **own** pressed-test (`0x134C9E`), then **remaps the result**: `C4 → C8` (a pressed 3-layer BD-ROM) or `F4 → E8` (a genuine recordable BDXL disc — restored, so no regression);
+- replaces the `bl 0x10A10A` at **`0x68FB2`** with a call to a ~64-byte routine in free space (`0x1A9C00`);
+- the routine temporarily sets the type to `F4`, runs the drive's **own** pressed-test (`0x134C9E`), then **remaps the result**: `C4 → C8` (a pressed 3-layer BD-ROM) or `F4 → E8` (a genuine recordable BDXL disc — restored, no regression);
 - calls the original decoder and returns.
 
-The decoder, disc-info read, and per-media SCSI command tables already route `C8` like `C4` once the type byte is set, so no further edits are needed for the common case. The resulting image is re-signed (`re/cmac.py::resign`) and **passes all four CMAC records** — meaning a drive would *accept and boot* it.
+The decoder, disc-info read, and per-media SCSI command tables already route `C8` like `C4` once the type byte is set, so no further edits are needed for identification. The image is re-signed (§2) and passes all four CMAC records.
 
-**"Integrity OK" is not "it works."** Whether the patch actually enables UHD reads is **unverified** and can only be confirmed by flashing. Static analysis has cleared the main concern — the reflectivity-measurement routine the patch calls (`0x102B52`) provably populates the buffer the pressed-test reads and already measures 3-layer discs natively — but two assumptions remain checkable only on hardware: whether the dual-layer reflectivity threshold suits a triple-layer disc, and a "long tail" of other code paths that branch on dual-vs-single with no triple case. **This project has not flashed anything.**
+## 4. Flashed and validated on real hardware
 
-## 4. Update & recovery mechanics
+The patch was **flashed to the drive and run** (via `makemkvcon rawflash main` with the public integrity re-signing; the drive's pre-2020 firmware accepts cleartext images). Key results:
 
-- The updater stages a full 2 MB image into DRAM, verifies the CMAC table, then programs flash. It **does not** touch the boot block or the per-unit calibration region by default.
-- The boot block carries an independent recovery identity (the drive advertises itself as `…BOOT` when main firmware is bad) and re-verifies the main firmware's CMACs every boot, so a bad *main*-firmware flash appears recoverable over the normal cable — **provided the boot block is left intact** (the candidate patch never touches it).
-- Pre-2020 LG firmware accepts **cleartext** update images; an AES-128-ECB transport wrapper ("encrypted" upgrade images) was added in 2020+ firmware. (LG firmware dates are offset by +100 years, so the commonly cited "2120" cutoff is calendar year 2020.)
+- **The modified firmware was accepted and booted.** The drive came up normally (not in recovery mode), and a read-back confirmed the live flash matched the patched image byte-for-byte with all CMAC records valid.
+- **The boot block (`0x0–0xFFFF`) was never written** — the updater programs from offset `0x10000` by default — so the flash was fully recoverable throughout (see §5).
+- **The classification fix works.** With a UHD disc (BD-100) inserted, the event log shows the fix execute end-to-end: the shortcut fires → our routine runs the reflectivity pressed-test → it correctly judges the disc **PRESSED** (measured ratio 0.64 < threshold 0.76) → the type is set to **C8** → and the drive takes the **BD-ROM disc-info read path**, exactly like a normal pressed disc.
 
-Even with all of the above, **a hardware SPI programmer as a last-resort recovery path, plus a verified known-good backup, are prerequisites before any write is ever attempted.** This repo does not provide flashing instructions.
+In other words: stock firmware rejects a UHD disc outright at classification; the patched firmware **correctly identifies it as a pressed 3-layer BD-ROM and attempts to read it.** That half of the problem is firmware, and it's fixed.
 
-## Open questions & limitations
+## 5. The one remaining wall: reading *pressed* 33 GB/layer data
 
-This is an incomplete, unverified research effort. Known limitations, most important first:
+With classification fixed, the failure moves one layer deeper — to the physical disc-info read. On the UHD disc, the drive seeks to the correct disc-info location and issues the read, but the hardware "read-ready" status (`0x04206080` bit 14) never asserts (read routine `0x10377C` returns error), with tracking position errors at the disc-info zone. A side-by-side with a working 2-layer disc shows them identical up to the read command, then diverging: the working disc returns read-OK and decodes its disc-info; the UHD disc returns read-fail and retries.
 
-- **Nothing has been flashed or tested on hardware.** "Passes the integrity check" means a drive would *accept and boot* the image — it is **not** evidence that UHD reading works, or that the image is safe. The patch could fail to help, or misbehave in ways that only appear on a real disc.
-- **Assumption B — reflectivity threshold (needs a disc).** The candidate patch reuses the drive's dual-layer "pressed vs. recordable" threshold (ratio `< 0.76`) for 3-layer discs. Whether that threshold correctly separates pressed from recordable *triple*-layer media is unverified.
-- **Assumption C — the dual-only "long tail" (needs a disc).** After identification succeeds, the type byte is read in many places; a number of secondary handlers branch on dual-vs-single (`C4`/`C0`) with **no triple (`C8`) case** and would take a default/else path. Whether any of these mishandle a `C8` disc (e.g. wrong capacity or 2-layer read geometry on 3 layers) can only be found with the disc. Some sites already handle `C8`; this was not exhaustively enumerated.
-- **Pre-flash engineering unknowns (static work still to do before any write would be responsible):**
-  - The purpose of the "update signatures" region at image `0x105C0–0x1060F` — whether it is a second gate the updater checks (beyond the CMAC table).
-  - Instruction-level confirmation of the boot-block recovery handler, to be certain a bad main-firmware flash is recoverable over the cable.
-  - The exact flash erase/commit step in the programmer routine.
-- **Assumption A is only *largely* cleared.** Static analysis shows the reflectivity-measurement routine populates the right buffer and natively measures 3-layer discs, but whether it needs a specific layer pre-focused by the normal ID sequence is a minor residual that is untestable without a disc.
-- **Scope.** This work is about disc *identification* only. It does nothing about AACS/decryption, and it has not been validated end-to-end to actually rip a UHD disc.
+The reason is a genuinely novel observation. Consider what the drive *can* read:
 
-## Method & tooling
+| | pressed (pits) | recordable (grooves) |
+|---|---|---|
+| **25 GB/layer** | ✅ standard BD-ROM | ✅ BD-R/RE |
+| **33 GB/layer** | ❌ **UHD BD-ROM** | ✅ BDXL (BD-R/RE XL) |
 
-Static reverse engineering with Capstone in a container (`re/Dockerfile`); helpers in `mt1939/re/` (`fw.py` disassembly/search, `cmac.py` integrity, `segtable.py` table parser, `buildpatch.py` the candidate image). The drive's internal event log was read read-only via vendor SCSI `READ BUFFER` commands to confirm the identification sequence.
+A 4K UHD disc is the **only** medium that is both **pressed** and **33 GB/layer** — and that combination did not exist when the MT1939 was designed. The drive has 33 GB/layer read capability, but only in its **recordable** read path (which navigates by the wobble groove a pressed disc lacks, so it can't be reused for pressed media). Its **pressed-pit** read path was only ever tuned for 25 GB/layer.
 
-## Credits & references
+So this is **not an optical limit** — the laser resolves 33 GB/layer marks either way (that's what reading BDXL requires). It's a **missing read-channel/servo parameter set** for the unprecedented pressed-33 GB combination: the pressed-media equalizer/tracking configuration can't lock onto the denser pressed pits, so the read never completes. We tested the most concrete candidate parameter (a focus-mode bit the recordable path sets and the pressed path doesn't); it flashed and ran cleanly but did not change the outcome, confirming the relevant parameters are elsewhere.
 
-- **AES-128-CMAC integrity scheme + public key:** [`mediatek-optical`](https://github.com/MattJackson/mediatek-optical) by MattJackson (independently re-verified here).
-- Prior MT1939 reverse engineering: [`coastermelt`](https://github.com/scanlime/coastermelt) (scanlime), [`optical-disc-drive-re`](https://github.com/cyrozap/optical-disc-drive-re) (cyrozap).
-- MakeMKV community forums for LibreDrive / firmware-flashing context.
+Those parameters live in **undocumented hardware registers** (servo/front-end blocks in the `0x04030000`/`0x040b0000`/`0x040c0000` ranges) with no public datasheet, intertwined with the pressed-vs-recordable addressing. We could not find an isolable, well-motivated firmware change that reconfigures the pressed read for 33 GB/layer. That is the practical wall: the knob almost certainly exists in silicon, but it isn't reachable by reverse-engineering the firmware alone.
+
+**This is the precise answer to "why can't MT1939 do UHD":** not the classification (that's firmware, and fixable — we did it), but that the drive has no read-channel configuration for pressed data at 33 GB/layer, a disc format newer than the chip.
+
+## 6. Update & recovery (why flashing here was safe to attempt)
+
+- `rawflash main` programs from offset **`0x10000`**, so the boot block (`0x0–0xFFFF`) is never written unless an "include boot block" bit is explicitly set (it isn't). The boot block is what makes recovery possible.
+- The boot block independently verifies the main firmware's CMAC segments **at every boot** (routine `0x8E94`). If they fail, it refuses to run the bad firmware, reports "not ready," and stays in a recovery mode that advertises itself as `…WH16NS40 BOOT` and can re-program flash over the cable — all traced in the firmware (the boot block has its own flash-controller code at `0x4AC0`).
+- So any bad *main*-firmware flash leaves the drive recoverable over SATA by re-flashing the stock image, as long as the boot block stays intact. A hardware SPI programmer remains the ultimate backstop and is strongly recommended before anyone attempts a write.
+
+## 7. What's proven, and what's open
+
+**Proven on hardware:** the AES-CMAC integrity crack and re-signing; that modified MT1939 firmware can be flashed, booted, and recovered; and that the UHD *classification* failure is firmware and is fixable.
+
+**Open (and likely needs a datasheet, not more firmware RE):** reconfiguring the pressed-pit read channel for 33 GB/layer. This is the boundary between "firmware decision" and "undocumented silicon configuration."
+
+**Scope:** this work is about disc *identification and reading* only. It does nothing with AACS/decryption, and it does not produce a working UHD rip. It is a research result, not a product.
+
+## 8. Method & tooling
+
+Static reverse engineering with Capstone in a container (`re/Dockerfile`); helpers in `mt1939/re/` (`fw.py` disassembly/search, `cmac.py` integrity verify + re-sign, `segtable.py` table parser, `buildpatch.py` the candidate image + a small verified Thumb assembler). The drive's internal event log was read read-only via vendor SCSI commands to instrument identification, before and after each experiment.
+
+## 9. Credits & references
+
+- **AES-128-CMAC firmware-integrity scheme + public key:** [`mediatek-optical`](https://github.com/MattJackson/mediatek-optical) by MattJackson (independently re-verified here).
+- Prior reverse engineering of the MT1939 platform: [`coastermelt`](https://github.com/scanlime/coastermelt) (Micah Elizabeth Scott) and [`optical-disc-drive-re`](https://github.com/cyrozap/optical-disc-drive-re) (cyrozap).
+- The MakeMKV community forums for LibreDrive / firmware-flashing context.
