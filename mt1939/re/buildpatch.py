@@ -48,6 +48,15 @@ F_10A10A    = 0x10A10A
 TYPE_ADDR   = 0x01FF9DD3
 REFL_ADDR   = 0x01FFA2F4
 CALL_102B52 = True         # assumption A; set False for the no-prep variant
+# --- v2 (bit-18 servo experiment) — TESTED ON HARDWARE AND REFUTED ---
+# Setting bit 18 of focus reg 0x04030020 for the C8 read (matching the recordable
+# path) was flashed and tested: it did NOT make the UHD disc-info read complete.
+# Kept as a documented experiment. Default off -> the default build is the
+# classification fix (v1), which IS validated on hardware. See FINDINGS.md §5.
+BIT18       = False        # True rebuilds the refuted bit-18 variant (patched-v2.bin)
+HOOK2_SITE  = 0xB9FF8      # `bl 0x46c0a` in the ROM read 0xB9FB0, after r0=0x30000
+NEWCODE2    = 0x1A9C60     # second free-space routine (after NEWCODE's 64 B; still FF, in rec2)
+F_46C0A     = 0x46C0A      # writes r0 -> servo reg 0x04030020
 
 # ---- tiny Thumb assembler (only the ops this routine needs) -----------------
 class Asm:
@@ -120,6 +129,18 @@ def build_newcode():
     a.label("done"); a.bl(F_10A10A); a.pop_pc()          # original decode + return
     return a.finish()
 
+def build_newcode2():
+    # v2: called in place of `bl 0x46c0a` at 0xB9FF8 (r0 already = 0x30000).
+    # If type==C8, override r0=0x70000 (set bit 18 = recordable/BDXL multi-layer focus);
+    # else leave r0 unchanged (0x30000) so C0/C4 2-layer BD-ROM reads are untouched.
+    a = Asm(NEWCODE2)
+    a.push(lr=True)
+    a.ldr_lit(1, TYPE_ADDR); a.ldrb_imm(1, 1); a.cmp_imm(1, 0xC8); a.bne("skip")
+    a.movs_imm(0, 7); a.lsls_imm(0, 0, 0x10)      # r0 = 0x70000
+    a.label("skip")
+    a.bl(F_46C0A); a.pop_pc()
+    return a.finish()
+
 def thumb_bl_bytes(site, target):
     off = target - (site + 4)
     S = (off >> 24) & 1; i1 = (off >> 23) & 1; i2 = (off >> 22) & 1
@@ -141,6 +162,16 @@ def main():
     # apply
     img[HOOK_SITE:HOOK_SITE+4] = thumb_bl_bytes(HOOK_SITE, NEWCODE)
     img[NEWCODE:NEWCODE+len(code)] = code
+    code2 = None
+    if BIT18:
+        orig2 = list(md.disasm(bytes(img[HOOK2_SITE:HOOK2_SITE+4]), HOOK2_SITE))
+        assert orig2 and orig2[0].mnemonic == "bl" and orig2[0].op_str.endswith("0x46c0a"), \
+            f"hook2 site not the expected bl 0x46c0a: {orig2[0].mnemonic} {orig2[0].op_str}"
+        code2 = build_newcode2()
+        assert img[NEWCODE2:NEWCODE2+len(code2)] == b"\xFF"*len(code2), "NEWCODE2 free space not FF"
+        assert NEWCODE2 >= NEWCODE + len(code), "NEWCODE2 overlaps NEWCODE"
+        img[HOOK2_SITE:HOOK2_SITE+4] = thumb_bl_bytes(HOOK2_SITE, NEWCODE2)
+        img[NEWCODE2:NEWCODE2+len(code2)] = code2
     # re-sign
     signed = cmac.resign(bytes(img))
     # verify integrity
@@ -150,9 +181,9 @@ def main():
     # write out
     outdir = os.path.join(os.path.dirname(DUMP), "..", "out"); outdir = os.path.abspath(outdir)
     os.makedirs(outdir, exist_ok=True)
-    outp = os.path.join(outdir, "patched.bin")
+    outp = os.path.join(outdir, "patched-v2.bin" if BIT18 else "patched.bin")
     open(outp, "wb").write(signed)
-    print("wrote", outp, len(signed), "bytes; CALL_102B52 =", CALL_102B52)
+    print("wrote", outp, len(signed), "bytes; CALL_102B52 =", CALL_102B52, "BIT18 =", BIT18)
     # disassemble patched regions for review
     print(f"\n=== patched hook @0x{HOOK_SITE:06x} ===")
     for i in md.disasm(signed[HOOK_SITE:HOOK_SITE+4], HOOK_SITE):
@@ -160,6 +191,13 @@ def main():
     print(f"\n=== NEWCODE @0x{NEWCODE:06x} ({len(code)} bytes) ===")
     for i in md.disasm(code, NEWCODE):
         print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
+    if BIT18:
+        print(f"\n=== v2 hook @0x{HOOK2_SITE:06x} ===")
+        for i in md.disasm(signed[HOOK2_SITE:HOOK2_SITE+4], HOOK2_SITE):
+            print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
+        print(f"\n=== NEWCODE2 @0x{NEWCODE2:06x} ({len(code2)} bytes) ===")
+        for i in md.disasm(code2, NEWCODE2):
+            print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
     return ok
 
 if __name__ == "__main__":
