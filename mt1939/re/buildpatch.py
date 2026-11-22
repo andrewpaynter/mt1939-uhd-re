@@ -101,6 +101,21 @@ HOOK6_SITE  = 0x2FF08;  NEWCODE6 = 0x1A9D40;  LOG_3E04 = 0x3E0408FA
 # (0x625/0x834 = 0.749 = 25/33.4). Class 1 (speed 4, which the disc-ID handler hard-codes for DI attempts)
 # is 0xC1C/0xD48 = 0.91. Set class 1 to 0xD48*0.749 = 0x9F3 (2547 rpm) there and in NEWCODE4's row.
 CLASS1_FIX  = False
+# v3f "UHD front end" (2026-11-21): MT1959's read-channel init dispatches (type>>2)==0x32 (C8-CB, pressed
+# triple layer) to a dedicated FE setup 0xFF542 BEFORE its BD-R XL branch; MT1939 (0x108EAC) has no such branch,
+# so C8 gets BD-R XL FE values from 0x18F6F0 (0x530/0x5D0/0x3B5/0x241/0x250). Also our shortcut never re-runs the
+# read-channel init 0x108A62 after remapping to C8 (Rogue One's normal path does, right after its pressed test).
+#  (a) NEWCODE: pressed branch calls 0x108A62 after the remap (as 0x10958E does on the normal path);
+#  (b) hook 0x18F93E (`bl 0x613FE`, first FE write in 0x18F6F0, all 5 values already in [sp+0x18..+8]):
+#      if (type>>2)==0x32 overwrite the slots with MT1959 0xFF542's values, log 3e05, then continue.
+#      The per-layer RAM copy loop (0x18F9E4) reads the same slots, so registers and RAM copies stay consistent.
+FE_FIX      = False
+F_108A62    = 0x108A62
+F_613FE     = 0x613FE
+HOOK8_SITE  = 0x18F93E
+NEWCODE8    = 0x1A9D80
+LOG_3E05    = 0x3E0504EA
+UHD_FE      = [(0x18, 0x3D0), (0x14, 0x6C0), (0x10, 0x3B5), (0x0C, 0x341), (0x08, 0x228)]  # (slot, value)
 TL_ROW      = 0x1A70B4
 CLASS1_RPM  = 0x9F3
 UHD_RPM_ROW = [u if a == b else round(a * u / b) for a, b, u in zip(_STD39, _STD59, _UHD59)]
@@ -133,6 +148,8 @@ class Asm:
     def movs_rr(self, rd, rm):         self._emit16(0x1C00 | (rm << 3) | rd)
     def push_lr(self):                 self._emit16(0xB500)
     def pop_r0_r1(self):               self._emit16(0xBC03)
+    def pop_r3(self):                  self._emit16(0xBC08)
+    def lsrs_imm(self, rd, rm, imm):   self._emit16(0x0800 | ((imm & 0x1F) << 6) | (rm << 3) | rd)
     def bx_r1(self):                   self._emit16(0x4708)
     def orrs_(self, rd, rm):           self._emit16(0x4300 | (rm << 3) | rd)
     def ldr_lit(self, rt, value):      # ldr rt,=value  (pooled)
@@ -184,9 +201,26 @@ def build_newcode():
     a.ldrb_imm(0, 1, 0); a.ldrb_imm(2, 1, 1); a.lsls_imm(2, 2, 8); a.orrs(0, 2)  # r0 = b1<<8|b0
     a.bl(F_134C9E)                        # run dual pressed-test
     a.ldr_lit(1, TYPE_ADDR); a.ldrb_imm(0, 1); a.cmp_imm(0, 0xC4); a.bne("rec")
-    a.movs_imm(0, PRESSED_TL_TYPE); a.strb_imm(0, 1); a.b("done")   # pressed -> C8 (v3a: C4)
+    a.movs_imm(0, PRESSED_TL_TYPE); a.strb_imm(0, 1)                # pressed -> C8 (v3a: C4)
+    if FE_FIX: a.bl(F_108A62)              # v3f: re-run read-channel/FE init for the new type
+    a.b("done")
     a.label("rec"); a.movs_imm(0, 0xE8); a.strb_imm(0, 1)  # recordable -> restore E8
     a.label("done"); a.bl(F_10A10A); a.pop_pc()          # original decode + return
+    return a.finish()
+
+def build_newcode8():   # at 0x18F93E inside 0x18F6F0: FE values in [sp+0x18,+0x14,+0x10,+0xC,+0x8]
+    a = Asm(NEWCODE8)
+    a.push_lr()                                            # sp -= 4 -> slots at +4
+    a.ldr_lit(1, TYPE_ADDR); a.ldrb_imm(1, 1); a.lsrs_imm(1, 1, 2); a.cmp_imm(1, 0x32); a.bne("skip")
+    for slot, val in UHD_FE:
+        a.ldr_lit(1, val); a.str_sp(1, (slot + 4) // 4)
+    a.ldr_lit(1, TYPE_ADDR); a.ldrb_imm(1, 1); a.lsls_imm(1, 1, 24)
+    a.ldr_lit(2, UHD_FE[0][1]); a.orrs(1, 2)               # r1 = type<<24 | 0x3D0
+    a.ldr_lit(0, LOG_3E05); a.bl(F_LOG)
+    a.label("skip")
+    a.ldr_sp(0, (0x18 + 4) // 4)                           # r0 = [slot 0x18] (as the original ldr did)
+    a.pop_r3(); a.mov_lr_r3()                              # restore caller's lr
+    a.ldr_lit(3, F_613FE | 1); a.bx_r3()                   # tail-call swap16; it returns to 0x18F942
     return a.finish()
 
 def build_newcode2():
@@ -300,6 +334,13 @@ def main():
         assert NEWCODE4 >= NEWCODE3 + 0x24, "NEWCODE4 overlaps NEWCODE3"
         img[HOOK4_SITE:HOOK4_SITE+4] = thumb_bl_bytes(HOOK4_SITE, NEWCODE4)
         img[NEWCODE4:NEWCODE4+len(code4)] = code4
+    if FE_FIX:
+        assert bytes(img[HOOK8_SITE:HOOK8_SITE+4]).hex() == "d1f65efd", "hook8 site changed (expect bl 0x613FE)"
+        code8 = build_newcode8()
+        assert img[NEWCODE8:NEWCODE8+len(code8)] == b"\xFF"*len(code8), "NEWCODE8 free space not FF"
+        img[NEWCODE8:NEWCODE8+len(code8)] = code8
+        img[HOOK8_SITE:HOOK8_SITE+4] = bl_bytes(HOOK8_SITE, NEWCODE8)
+        print(f"=== hook8 @{HOOK8_SITE:#x} / NEWCODE8 @{NEWCODE8:#x} ({len(code8)} bytes) ===")
     if CLASS1_FIX:
         assert struct.unpack_from("<6H", img, TL_ROW) == (0x625, 0xC1C, 0xE60, 0x1305, 0x1768, 0x1C17), "TL row changed"
         struct.pack_into("<H", img, TL_ROW + 2, CLASS1_RPM)
@@ -323,7 +364,7 @@ def main():
     # write out
     outdir = os.path.join(os.path.dirname(DUMP), "..", "out"); outdir = os.path.abspath(outdir)
     os.makedirs(outdir, exist_ok=True)
-    outp = os.path.join(outdir, "patched-v3e.bin" if CLASS1_FIX else "patched-v3d.bin" if TRACE else "patched-v3c.bin" if UHD_SPEED else "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
+    outp = os.path.join(outdir, "patched-v3f.bin" if FE_FIX else "patched-v3e.bin" if CLASS1_FIX else "patched-v3d.bin" if TRACE else "patched-v3c.bin" if UHD_SPEED else "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
     open(outp, "wb").write(signed)
     print("wrote", outp, len(signed), "bytes; CALL_102B52 =", CALL_102B52, "BIT18 =", BIT18)
     # disassemble patched regions for review
