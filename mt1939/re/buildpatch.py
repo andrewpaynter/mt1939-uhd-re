@@ -71,6 +71,24 @@ PROBE_PSN   = 0x100000
 HOOK2_SITE  = 0xB9FF8      # `bl 0x46c0a` in the ROM read 0xB9FB0, after r0=0x30000
 NEWCODE2    = 0x1A9C60     # second free-space routine (after NEWCODE's 64 B; still FF, in rec2)
 F_46C0A     = 0x46C0A      # writes r0 -> servo reg 0x04030020
+# v3c "UHD spindle speed" (2026-11-21, MT1959 0xDCCFC comparison): MT1959 spins UHD discs at ~0.75x
+# (its own rpm row 0x14FF7C, ~= density ratio 25/33.4) so the channel bit rate matches a BD-25 at the
+# same speed class; MT1939's speed-set 0x104284 has one row (0x1A6FAE) and no type test.
+# Hook the `bl 0x681E6` (spindle rpm setter) at 0x104420: r0 = rpm, r4 = speed class 0-5, r6 = class*2.
+# NEWCODE4: if type==C8 use UHD_RPM_ROW[class]; log marker 3E01 (4 bytes: class, type, rpm16);
+# tail-call 0x681E6 with the original lr. Use together with DI_PROBE_DATAZONE (v3b) -> patched-v3c.bin.
+UHD_SPEED   = False
+HOOK4_SITE  = 0x104420
+NEWCODE4    = 0x1A9CC0     # fourth free-space routine (FF, in rec2), after NEWCODE3 (ends 0x1A9CA4)
+F_681E6     = 0x681E6
+F_LOG       = 0xF59CC
+LOG_3E01    = 0x3E0104EA   # event 0x3E01 (unused in stock fw), 4 data bytes
+# classes 0-2: MT1959's UHD values (MT1959 and MT1939 std rows are identical there);
+# classes 3-5: MT1939's own std row scaled by MT1959's UHD/std ratio for that class.
+_STD39 = [0x834, 0xD48, 0x1388, 0x1964, 0x1F72, 0x2648]
+_STD59 = [0x834, 0xD48, 0x1388, 0x198C, 0x2008, 0x2684]
+_UHD59 = [0x625, 0xC1C, 0xE60, 0x1305, 0x17E2, 0x1C17]
+UHD_RPM_ROW = [u if a == b else round(a * u / b) for a, b, u in zip(_STD39, _STD59, _UHD59)]
 
 # ---- tiny Thumb assembler (only the ops this routine needs) -----------------
 class Asm:
@@ -90,6 +108,14 @@ class Asm:
     def lsls_imm(self, rd, rm, imm):   self._emit16(0x0000 | ((imm & 0x1F) << 6) | (rm << 3) | rd)
     def orrs(self, rd, rm):            self._emit16(0x4300 | (rm << 3) | rd)
     def bx_lr(self):                   self._emit16(0x4770)
+    def push_r0_lr(self):              self._emit16(0xB501)
+    def pop_r0_r3(self):               self._emit16(0xBC09)
+    def mov_lr_r3(self):               self._emit16(0x469E)
+    def bx_r3(self):                   self._emit16(0x4718)
+    def ldrh_reg(self, rt, rn, rm):    self._emit16(0x5A00 | (rm << 6) | (rn << 3) | rt)
+    def str_sp(self, rt, imm8w):       self._emit16(0x9000 | (rt << 8) | (imm8w & 0xFF))
+    def ldr_sp(self, rt, imm8w):       self._emit16(0x9800 | (rt << 8) | (imm8w & 0xFF))
+    def orrs_(self, rd, rm):           self._emit16(0x4300 | (rm << 3) | rd)
     def ldr_lit(self, rt, value):      # ldr rt,=value  (pooled)
         idx = len(self.pool); self.pool.append(value)
         self.pool_refs.append((len(self.buf), rt, idx)); self._emit16(0x4800 | (rt << 8))
@@ -165,6 +191,26 @@ def build_newcode3():
     a.label("done"); a.ldr_lit(5, 0x02000E1C); a.bx_lr()
     return a.finish()
 
+def build_newcode4():
+    a = Asm(NEWCODE4)
+    a.push_r0_lr()                                   # [sp]=rpm, [sp+4]=lr (return to 0x104424)
+    a.ldr_lit(2, TYPE_ADDR); a.ldrb_imm(2, 2); a.cmp_imm(2, 0xC8); a.bne("log")
+    a.ldr_lit(1, 0)  # placeholder -> &UHD_RPM_ROW (patched below)
+    a.ldrh_reg(0, 1, 6); a.str_sp(0, 0)              # rpm := row[class]
+    a.label("log")
+    a.lsls_imm(1, 4, 24); a.lsls_imm(3, 2, 16); a.orrs_(1, 3)
+    a.ldr_sp(3, 0); a.orrs_(1, 3)                    # r1 = class<<24 | type<<16 | rpm
+    a.ldr_lit(0, LOG_3E01); a.bl(F_LOG)
+    a.pop_r0_r3(); a.mov_lr_r3()                     # r0 = rpm, lr = original return
+    a.ldr_lit(3, F_681E6 | 1); a.bx_r3()             # tail-call the rpm setter
+    code = bytearray(a.finish())
+    row_addr = NEWCODE4 + len(code)
+    # fix the placeholder literal (first pool entry with value 0) to point at the row
+    pool_start = len(code) - 4 * len(a.pool)
+    idx = a.pool.index(0); struct.pack_into("<I", code, pool_start + 4 * idx, row_addr)
+    code += struct.pack("<6H", *UHD_RPM_ROW)
+    return bytes(code)
+
 def thumb_bl_bytes(site, target):
     off = target - (site + 4)
     S = (off >> 24) & 1; i1 = (off >> 23) & 1; i2 = (off >> 22) & 1
@@ -207,6 +253,15 @@ def main():
         assert NEWCODE3 >= NEWCODE + len(code), "NEWCODE3 overlaps NEWCODE"
         img[HOOK3_SITE:HOOK3_SITE+4] = thumb_bl_bytes(HOOK3_SITE, NEWCODE3)
         img[NEWCODE3:NEWCODE3+len(code3)] = code3
+    if UHD_SPEED:
+        o4 = list(md.disasm(bytes(img[HOOK4_SITE:HOOK4_SITE+4]), HOOK4_SITE))
+        assert o4 and o4[0].mnemonic == "bl" and int(o4[0].op_str.lstrip("#"), 16) == F_681E6, "hook4 is not bl 0x681E6"
+        assert struct.unpack_from("<H", img, 0x1042E2)[0] == 0x0066, "r6 != class*2 setup (lsls r6,r4,#1) not found"
+        code4 = build_newcode4()
+        assert img[NEWCODE4:NEWCODE4+len(code4)] == b"\xFF"*len(code4), "NEWCODE4 free space not FF"
+        assert NEWCODE4 >= NEWCODE3 + 0x24, "NEWCODE4 overlaps NEWCODE3"
+        img[HOOK4_SITE:HOOK4_SITE+4] = thumb_bl_bytes(HOOK4_SITE, NEWCODE4)
+        img[NEWCODE4:NEWCODE4+len(code4)] = code4
     # re-sign
     signed = cmac.resign(bytes(img))
     # verify integrity
@@ -216,7 +271,7 @@ def main():
     # write out
     outdir = os.path.join(os.path.dirname(DUMP), "..", "out"); outdir = os.path.abspath(outdir)
     os.makedirs(outdir, exist_ok=True)
-    outp = os.path.join(outdir, "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
+    outp = os.path.join(outdir, "patched-v3c.bin" if UHD_SPEED else "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
     open(outp, "wb").write(signed)
     print("wrote", outp, len(signed), "bytes; CALL_102B52 =", CALL_102B52, "BIT18 =", BIT18)
     # disassemble patched regions for review
@@ -230,6 +285,10 @@ def main():
         print(f"\n=== hook3 @0x{HOOK3_SITE:06x} / NEWCODE3 @0x{NEWCODE3:06x} ({len(code3)} bytes) ===")
         for i in md.disasm(signed[HOOK3_SITE:HOOK3_SITE+4], HOOK3_SITE): print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
         for i in md.disasm(code3, NEWCODE3): print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
+    if UHD_SPEED:
+        print(f"\n=== hook4 @0x{HOOK4_SITE:06x} / NEWCODE4 @0x{NEWCODE4:06x} ({len(code4)} bytes; row {[hex(x) for x in UHD_RPM_ROW]}) ===")
+        for i in md.disasm(signed[HOOK4_SITE:HOOK4_SITE+4], HOOK4_SITE): print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
+        for i in md.disasm(code4, NEWCODE4): print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
     if BIT18:
         print(f"\n=== v2 hook @0x{HOOK2_SITE:06x} ===")
         for i in md.disasm(signed[HOOK2_SITE:HOOK2_SITE+4], HOOK2_SITE):
