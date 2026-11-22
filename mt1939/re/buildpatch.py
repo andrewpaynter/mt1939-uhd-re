@@ -339,7 +339,7 @@ def main():
         code8 = build_newcode8()
         assert img[NEWCODE8:NEWCODE8+len(code8)] == b"\xFF"*len(code8), "NEWCODE8 free space not FF"
         img[NEWCODE8:NEWCODE8+len(code8)] = code8
-        img[HOOK8_SITE:HOOK8_SITE+4] = bl_bytes(HOOK8_SITE, NEWCODE8)
+        img[HOOK8_SITE:HOOK8_SITE+4] = thumb_bl_bytes(HOOK8_SITE, NEWCODE8)
         print(f"=== hook8 @{HOOK8_SITE:#x} / NEWCODE8 @{NEWCODE8:#x} ({len(code8)} bytes) ===")
     if CLASS1_FIX:
         assert struct.unpack_from("<6H", img, TL_ROW) == (0x625, 0xC1C, 0xE60, 0x1305, 0x1768, 0x1C17), "TL row changed"
