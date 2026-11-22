@@ -115,6 +115,17 @@ F_613FE     = 0x613FE
 HOOK8_SITE  = 0x18F93E
 NEWCODE8    = 0x1A9D80
 LOG_3E05    = 0x3E0504EA
+# v3g "UHD extras" (2026-11-21, requires FE_FIX): the rest of MT1959's UHD-specific FE/register choices, C8-CB only:
+#  (a) BD-R XL search routine (0x1149E0 state 0x10, runs before every retry): FE[20/0/10] 0x530 -> 0x3D0 (hook 0x114D94,
+#      sets r7) and FE[2] 0x3C4 -> 0x3B5 (hook 0x114DCA, sets r0)  [MT1959 0xEA4CC branch];
+#  (b) search-routine measurement FE[8] 0x428 -> 0x530 (hook 0x114BA8, sets r0)  [MT1959 0xE6F0C];
+#  (c) in NEWCODE8: servo profile 0x21 = 0x6529C(1,1,0) (0x0420C22C nibble3 := 7, BD-R XL leaves 6)
+#      [MT1959 0xFF5B0 0x98E3A(2,0x21)] and 0x0420B144 &= ~(7<<17) (pressed-disc tail, MT1959 0xFF56E).
+UHD_EXTRA   = False
+F_6529C     = 0x6529C
+HOOK9_SITE  = 0x114D94;  NEWCODE9  = 0x1A9E40;  LOG_3E06 = 0x3E0604EA   # bytes 53273f01
+HOOK10_SITE = 0x114DCA;  NEWCODE10 = 0x1A9E80                           # bytes f1208000
+HOOK11_SITE = 0x114BA8;  NEWCODE11 = 0x1A9EC0;  LOG_3E07 = 0x3E0704EA   # bytes 8520c000
 UHD_FE      = [(0x18, 0x3D0), (0x14, 0x6C0), (0x10, 0x3B5), (0x0C, 0x341), (0x08, 0x228)]  # (slot, value)
 TL_ROW      = 0x1A70B4
 CLASS1_RPM  = 0x9F3
@@ -148,6 +159,9 @@ class Asm:
     def movs_rr(self, rd, rm):         self._emit16(0x1C00 | (rm << 3) | rd)
     def push_lr(self):                 self._emit16(0xB500)
     def pop_r0_r1(self):               self._emit16(0xBC03)
+    def ldr_imm(self, rt, rn, imm=0):  self._emit16(0x6800 | (((imm >> 2) & 0x1F) << 6) | (rn << 3) | rt)
+    def str_imm(self, rt, rn, imm=0):  self._emit16(0x6000 | (((imm >> 2) & 0x1F) << 6) | (rn << 3) | rt)
+    def bics(self, rd, rm):            self._emit16(0x4380 | (rm << 3) | rd)
     def pop_r3(self):                  self._emit16(0xBC08)
     def lsrs_imm(self, rd, rm, imm):   self._emit16(0x0800 | ((imm & 0x1F) << 6) | (rm << 3) | rd)
     def bx_r1(self):                   self._emit16(0x4708)
@@ -214,6 +228,9 @@ def build_newcode8():   # at 0x18F93E inside 0x18F6F0: FE values in [sp+0x18,+0x
     a.ldr_lit(1, TYPE_ADDR); a.ldrb_imm(1, 1); a.lsrs_imm(1, 1, 2); a.cmp_imm(1, 0x32); a.bne("skip")
     for slot, val in UHD_FE:
         a.ldr_lit(1, val); a.str_sp(1, (slot + 4) // 4)
+    if UHD_EXTRA:
+        a.movs_imm(0, 1); a.movs_imm(1, 1); a.movs_imm(2, 0); a.bl(F_6529C)      # servo profile 0x21 part
+        a.ldr_lit(1, 0x0420B144); a.ldr_imm(0, 1); a.ldr_lit(2, 7 << 17); a.bics(0, 2); a.str_imm(0, 1)
     a.ldr_lit(1, TYPE_ADDR); a.ldrb_imm(1, 1); a.lsls_imm(1, 1, 24)
     a.ldr_lit(2, UHD_FE[0][1]); a.orrs(1, 2)               # r1 = type<<24 | 0x3D0
     a.ldr_lit(0, LOG_3E05); a.bl(F_LOG)
@@ -221,6 +238,33 @@ def build_newcode8():   # at 0x18F93E inside 0x18F6F0: FE values in [sp+0x18,+0x
     a.ldr_sp(0, (0x18 + 4) // 4)                           # r0 = [slot 0x18] (as the original ldr did)
     a.pop_r3(); a.mov_lr_r3()                              # restore caller's lr
     a.ldr_lit(3, F_613FE | 1); a.bx_r3()                   # tail-call swap16; it returns to 0x18F942
+    return a.finish()
+
+def _uhd_pick(a, scratch, dst, normal, uhd):
+    """dst := (type>>2)==0x32 ? uhd : normal; leaves Z flag = 'is UHD' (ldr doesn't touch flags)."""
+    a.ldr_lit(scratch, TYPE_ADDR); a.ldrb_imm(scratch, scratch); a.lsrs_imm(scratch, scratch, 2)
+    a.ldr_lit(dst, normal); a.cmp_imm(scratch, 0x32); a.bne("ret"); a.ldr_lit(dst, uhd)
+
+def build_newcode9():   # at 0x114D94 (replaces movs r7,#0x53; lsls r7,#4): r7 = FE[20/0/10] value; r0-r3 dead
+    a = Asm(NEWCODE9); a.push_lr()
+    _uhd_pick(a, 0, 7, 0x530, 0x3D0)
+    a.ldr_lit(1, TYPE_ADDR); a.ldrb_imm(1, 1); a.lsls_imm(1, 1, 24); a.orrs(1, 7)
+    a.ldr_lit(0, LOG_3E06); a.bl(F_LOG)
+    a.label("ret"); a.pop_pc()
+    return a.finish()
+
+def build_newcode10():  # at 0x114DCA (replaces movs r0,#0xF1; lsls r0,#2): r0 = FE[2] value; r1 dead; r7 live (untouched)
+    a = Asm(NEWCODE10)
+    _uhd_pick(a, 1, 0, 0x3C4, 0x3B5)
+    a.label("ret"); a.bx_lr()
+    return a.finish()
+
+def build_newcode11():  # at 0x114BA8 (replaces movs r0,#0x85; lsls r0,#3): r0 = FE[8] value; r1-r3 dead
+    a = Asm(NEWCODE11); a.push_lr()
+    _uhd_pick(a, 1, 0, 0x428, 0x530)
+    a.ldr_lit(1, TYPE_ADDR); a.ldrb_imm(1, 1); a.lsls_imm(1, 1, 24); a.ldr_lit(2, 0x530); a.orrs(1, 2)
+    a.ldr_lit(0, LOG_3E07); a.bl(F_LOG); a.ldr_lit(0, 0x530)
+    a.label("ret"); a.pop_pc()
     return a.finish()
 
 def build_newcode2():
@@ -341,6 +385,19 @@ def main():
         img[NEWCODE8:NEWCODE8+len(code8)] = code8
         img[HOOK8_SITE:HOOK8_SITE+4] = thumb_bl_bytes(HOOK8_SITE, NEWCODE8)
         print(f"=== hook8 @{HOOK8_SITE:#x} / NEWCODE8 @{NEWCODE8:#x} ({len(code8)} bytes) ===")
+        assert NEWCODE8 + len(code8) <= NEWCODE9, "NEWCODE8 overlaps NEWCODE9"
+    if UHD_EXTRA:
+        assert FE_FIX, "UHD_EXTRA builds on FE_FIX"
+        for site, want, nc, build in ((HOOK9_SITE, "53273f01", NEWCODE9, build_newcode9),
+                                      (HOOK10_SITE, "f1208000", NEWCODE10, build_newcode10),
+                                      (HOOK11_SITE, "8520c000", NEWCODE11, build_newcode11)):
+            assert bytes(img[site:site+4]).hex() == want, f"hook site {site:#x} changed"
+            c = build()
+            assert len(c) <= 0x40, f"stub @{nc:#x} too big"
+            assert img[nc:nc+len(c)] == b"\xFF"*len(c), f"free space at {nc:#x} not FF"
+            img[nc:nc+len(c)] = c
+            img[site:site+4] = thumb_bl_bytes(site, nc)
+            print(f"=== hook @{site:#x} -> {nc:#x} ({len(c)} bytes) ===")
     if CLASS1_FIX:
         assert struct.unpack_from("<6H", img, TL_ROW) == (0x625, 0xC1C, 0xE60, 0x1305, 0x1768, 0x1C17), "TL row changed"
         struct.pack_into("<H", img, TL_ROW + 2, CLASS1_RPM)
@@ -364,7 +421,7 @@ def main():
     # write out
     outdir = os.path.join(os.path.dirname(DUMP), "..", "out"); outdir = os.path.abspath(outdir)
     os.makedirs(outdir, exist_ok=True)
-    outp = os.path.join(outdir, "patched-v3f.bin" if FE_FIX else "patched-v3e.bin" if CLASS1_FIX else "patched-v3d.bin" if TRACE else "patched-v3c.bin" if UHD_SPEED else "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
+    outp = os.path.join(outdir, "patched-v3g.bin" if UHD_EXTRA else "patched-v3f.bin" if FE_FIX else "patched-v3e.bin" if CLASS1_FIX else "patched-v3d.bin" if TRACE else "patched-v3c.bin" if UHD_SPEED else "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
     open(outp, "wb").write(signed)
     print("wrote", outp, len(signed), "bytes; CALL_102B52 =", CALL_102B52, "BIT18 =", BIT18)
     # disassemble patched regions for review
