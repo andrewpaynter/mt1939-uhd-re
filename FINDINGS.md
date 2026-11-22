@@ -2,7 +2,7 @@
 
 A technical account of reverse-engineering why an LG WH16NS40 (MediaTek **MT1939** controller, firmware 1.00) refuses 4K Ultra HD Blu-ray discs — and how far that refusal can be pushed back. This includes a firmware patch that was **built, flashed, and run on real hardware** (fully recoverable), which fixes the drive's disc *classification*, plus a precise identification of the one remaining wall.
 
-The short version: the common wisdom is "MT1939 can't do UHD, nobody knows why." We now know why — in instrumented detail — and we proved on hardware that a big part of it is a *firmware* decision, not a hardware one.
+The short version: the common wisdom is "MT1939 can't do UHD, nobody knows why." We now know why — in instrumented detail — and we proved on hardware that a big part of it is a *firmware* decision, not a hardware one. The rest, actually reading the disc, did not move even after porting the UHD-specific settings of a UHD-capable MT1959 firmware (§6), which points to the chip itself.
 
 > Addresses below are flash/CPU offsets in the 2 MB firmware image (code runs execute-in-place, so file offset = CPU address). The controller is 32-bit ARM, mostly Thumb. All static analysis is read-only against a dump from the drive; the one hardware write (the firmware flash) is described in §4 and was fully recoverable. **See the [WARNING in the README](README.md) before doing anything with this.**
 
@@ -56,32 +56,57 @@ The reason is a genuinely novel observation. Consider what the drive *can* read:
 
 A 4K UHD disc is the **only** medium that is both **pressed** and **33 GB/layer** — and that combination did not exist when the MT1939 was designed. The drive has 33 GB/layer read capability, but only in its **recordable** read path (which navigates by the wobble groove a pressed disc lacks, so it can't be reused for pressed media). Its **pressed-pit** read path was only ever tuned for 25 GB/layer.
 
-So this is **not an optical limit** — the laser resolves 33 GB/layer marks either way (that's what reading BDXL requires). It's a **missing read-channel/servo parameter set** for the unprecedented pressed-33 GB combination: the pressed-media equalizer/tracking configuration can't lock onto the denser pressed pits, so the read never completes. We tested the most concrete candidate parameter (a focus-mode bit the recordable path sets and the pressed path doesn't); it flashed and ran cleanly but did not change the outcome, confirming the relevant parameters are elsewhere.
+The first hypothesis was a **missing read-channel/servo parameter set** for the pressed-33 GB combination rather than an optical limit: the laser resolves 33 GB/layer marks either way (reading BDXL requires it), so perhaps only the pressed-media equalizer/tracking configuration was never tuned for the denser pits. We tested the most concrete candidate parameter (a focus-mode bit the recordable path sets and the pressed path doesn't); it flashed and ran cleanly but did not change the outcome.
 
-Those parameters live in **undocumented hardware registers** (servo/front-end blocks in the `0x04030000`/`0x040b0000`/`0x040c0000` ranges) with no public datasheet, intertwined with the pressed-vs-recordable addressing. We could not find an isolable, well-motivated firmware change that reconfigures the pressed read for 33 GB/layer. That is the practical wall: the knob almost certainly exists in silicon, but it isn't reachable by reverse-engineering the firmware alone.
+Those parameters live in **undocumented hardware registers** (servo/front-end blocks in the `0x04030000`/`0x040b0000`/`0x040c0000` ranges) with no public datasheet. With MT1939 firmware alone there was no well-motivated change left to try. §6 describes how the UHD-capable MT1959 firmware was then used as a stand-in for that datasheet, and what testing it showed.
 
-**This is the precise answer to "why can't MT1939 do UHD":** not the classification (that's firmware, and fixable — we did it), but that the drive has no read-channel configuration for pressed data at 33 GB/layer, a disc format newer than the chip.
+## 6. Comparison with MT1959, and porting its UHD handling (v3a–v3g)
 
-## 6. Update & recovery (why flashing here was safe to attempt)
+**Getting a reference.** LG's own WH16NS60 (MT1959) updaters are still published on LG's support site. Inside each `.exe`, a resource holds a ZIP with every 16-bit word byte-swapped; un-swapping it gives a **plaintext 2 MB MT1959 image** with the same layout and the same AES-CMAC integrity scheme as ours (`re/cmac.py` verifies all four of its records). Part of its code is a compressed overlay, which `re/mtkunpack.py` unpacks. This firmware is used **only for static comparison**; flashing MT1959 firmware onto an MT1939 drive would brick it.
+
+**What the comparison shows.**
+- **Same silicon interface.** Of ~1,400 hardware registers each firmware touches, 1,343 are shared. The low-level servo/front-end accessors are instruction-identical, and the disc-info block read is the same routine with the same read-ready check (MT1939 `0x10377C` ≡ MT1959 `0x851A2`). So whatever makes MT1959 succeed is set up *before* that read.
+- **Explicit UHD media classes.** MT1959 tests for `(type>>2)==0x32` (C8–CB, pressed 3-layer) and `type==0xC7` (very likely UHD dual-layer, BD-66) at ~54 places. MT1939 has none of these tests.
+- **UHD-specific behaviour on the identification path** (each one found, ported to MT1939, flashed and tested):
+
+| Build | What it changed on MT1939 (only for pressed 3-layer discs) | Result on a UHD disc |
+|---|---|---|
+| v3a | Classify as a standard dual-layer BD-ROM (C4) instead of C8, approximating MT1959's "inner-zone mode", which treats a UHD's lead-in area like standard BD | Still no read |
+| v3b | Probe the **data zone** (PSN 0x100000) instead of the disc-info zone, as MT1959 locks there first | **No lock anywhere on the disc**, so the problem isn't specific to the inner zone |
+| v3c | MT1959's UHD spindle-speed row | No effect: that speed routine doesn't run during identification |
+| v3d | Trace only: log spindle rpm and read clock at each read | MT1939 already spins and clocks a C8 disc exactly as MT1959 does a UHD disc (3100 rpm at the disc-info read, same ×23 clock formula) |
+| v3e | Density-compensated rpm for the disc-info read | Change in force; still no read |
+| v3f | MT1959's **dedicated pressed-UHD front-end profile** (MT1939 gave pressed 3-layer discs the recordable BD-R XL profile) | Values confirmed in force at every attempt; still no read |
+| v3g | The rest: UHD values in the retry/search routine, a measurement setting, the servo-profile selector MT1959 uses for UHD, and its register bit changes | Every hook confirmed firing; still no read |
+
+Every build was flashed the same recoverable way as §4 (boot block never written, live flash read back and verified), and each change was confirmed from the drive's own event log before its result was counted. Normal discs were unaffected throughout: every change is gated on the pressed 3-layer type.
+
+**Also checked, not ported:** MT1959's UHD read-channel coefficient tables. Its UHD rows differ from its normal BD-ROM rows in only a few entries (none at the lowest speed setting), and they appear to be applied only after identification. Still unported: a layer-2 calibration call, a layer-order table and an alternate front-end branch. None of these looks like it would turn "no signal at all" into a successful read.
+
+**Conclusion.** MT1939 now matches MT1959's UHD handling on everything found along the identification path, and it still never gets a readable signal from a pressed 33 GB/layer layer, anywhere on the disc. The most likely remaining explanation is the **silicon**: MT1959's read channel can resolve pressed 33 GB/layer pits and MT1939's can't, even with the same register settings. A missing setting we haven't found can't be ruled out, but there is no longer a concrete lead pointing to one.
+
+**Answer to "why can't MT1939 do UHD":** classification is a firmware bug, and it's fixed here. Reading is blocked below every firmware setting MT1959 changes for UHD, which points to a hardware limit of the older chip.
+
+## 7. Update & recovery (why flashing here was safe to attempt)
 
 - `rawflash main` programs from offset **`0x10000`**, so the boot block (`0x0–0xFFFF`) is never written unless an "include boot block" bit is explicitly set (it isn't). The boot block is what makes recovery possible.
 - The boot block independently verifies the main firmware's CMAC segments **at every boot** (routine `0x8E94`). If they fail, it refuses to run the bad firmware, reports "not ready," and stays in a recovery mode that advertises itself as `…WH16NS40 BOOT` and can re-program flash over the cable — all traced in the firmware (the boot block has its own flash-controller code at `0x4AC0`).
 - So any bad *main*-firmware flash leaves the drive recoverable over SATA by re-flashing the stock image, as long as the boot block stays intact. A hardware SPI programmer remains the ultimate backstop and is strongly recommended before anyone attempts a write.
 
-## 7. What's proven, and what's open
+## 8. What's proven, and what's open
 
-**Proven on hardware:** the AES-CMAC integrity crack and re-signing; that modified MT1939 firmware can be flashed, booted, and recovered; and that the UHD *classification* failure is firmware and is fixable.
+**Proven on hardware:** the AES-CMAC integrity crack and re-signing; that modified MT1939 firmware can be flashed, booted, and recovered (nine builds flashed over the course of the project); that the UHD *classification* failure is firmware and is fixable; and that porting MT1959's UHD settings for the identification path (front-end profile, speed, clock, servo profile and register changes) does **not** make the disc readable.
 
-**Open (and likely needs a datasheet, not more firmware RE):** reconfiguring the pressed-pit read channel for 33 GB/layer. This is the boundary between "firmware decision" and "undocumented silicon configuration."
+**Open:** whether the read wall is purely silicon (most likely, see §6) or a setting not yet found. Answering it definitively would need a datasheet, or a way to watch the read-channel signal directly.
 
 **Scope:** this work is about disc *identification and reading* only. It does nothing with AACS/decryption, and it does not produce a working UHD rip. It is a research result, not a product.
 
-## 8. Method & tooling
+## 9. Method & tooling
 
-Static reverse engineering with Capstone in a container (`re/Dockerfile`); helpers in `mt1939/re/` (`fw.py` disassembly/search, `cmac.py` integrity verify + re-sign, `segtable.py` table parser, `buildpatch.py` the candidate image + a small verified Thumb assembler). The drive's internal event log was read read-only via vendor SCSI commands to instrument identification, before and after each experiment.
+Static reverse engineering with Capstone in a container (`re/Dockerfile`); helpers in `mt1939/re/` (`fw.py` disassembly/search, `cmac.py` integrity verify + re-sign, `segtable.py` table parser, `buildpatch.py` the patched images + a small verified Thumb assembler, with one flag per experiment). For the MT1959 comparison: `mtkunpack.py` (overlay unpacker), `xmatch.py` (cross-firmware function matching), `mmio.py` (register census), `typechecks.py`/`uhdsites*.py` (disc-type branch census) and `veneers.py` (MT1959 stub resolution). The drive's internal event log was read read-only via vendor SCSI commands to instrument identification, before and after each experiment; `logparse.py` decodes it and `scratch/newrecs.py` counts key events between two captures. Several test builds added their own log records (event codes `3e01`–`3e07`) so each change could be confirmed as in force.
 
-## 9. Credits & references
+## 10. Credits & references
 
 - **AES-128-CMAC firmware-integrity scheme + public key:** [`mediatek-optical`](https://github.com/MattJackson/mediatek-optical) by MattJackson (independently re-verified here).
 - Prior reverse engineering of the MT1939 platform: [`coastermelt`](https://github.com/scanlime/coastermelt) (Micah Elizabeth Scott) and [`optical-disc-drive-re`](https://github.com/cyrozap/optical-disc-drive-re) (cyrozap).
-- The MakeMKV community forums for LibreDrive / firmware-flashing context.
+- The MakeMKV community forums for LibreDrive / firmware-flashing context, and for the description of MediaTek's packed code-overlay format.
