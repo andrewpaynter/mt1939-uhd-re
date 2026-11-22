@@ -88,6 +88,14 @@ LOG_3E01    = 0x3E0104EA   # event 0x3E01 (unused in stock fw), 4 data bytes
 _STD39 = [0x834, 0xD48, 0x1388, 0x1964, 0x1F72, 0x2648]
 _STD59 = [0x834, 0xD48, 0x1388, 0x198C, 0x2008, 0x2684]
 _UHD59 = [0x625, 0xC1C, 0xE60, 0x1305, 0x17E2, 0x1C17]
+# v3d "speed/clock trace" (diagnostic, no behaviour change): log every call of the spindle setter
+# 0x681E6 (event 3E03: rpm, caller) and the read-clock multiplier setter 0x2FF06 (event 3E04: value,
+# caller) so the Dune log shows what rpm/clock are in force at the DI reads and who set them.
+# Hooks sit after each setter's push (lr already saved): 0x681EE (`ldr r0,=0x04205040; subs r0,#0x20`,
+# r1-r3 dead) and 0x2FF08 (`cmp r0,#0; beq 0x2FF86`, emulated in the stub). Use with UHD_SPEED -> v3d.
+TRACE       = False
+HOOK5_SITE  = 0x681EE;  NEWCODE5 = 0x1A9D10;  LOG_3E03 = 0x3E0308FA
+HOOK6_SITE  = 0x2FF08;  NEWCODE6 = 0x1A9D40;  LOG_3E04 = 0x3E0408FA
 UHD_RPM_ROW = [u if a == b else round(a * u / b) for a, b, u in zip(_STD39, _STD59, _UHD59)]
 
 # ---- tiny Thumb assembler (only the ops this routine needs) -----------------
@@ -115,6 +123,10 @@ class Asm:
     def ldrh_reg(self, rt, rn, rm):    self._emit16(0x5A00 | (rm << 6) | (rn << 3) | rt)
     def str_sp(self, rt, imm8w):       self._emit16(0x9000 | (rt << 8) | (imm8w & 0xFF))
     def ldr_sp(self, rt, imm8w):       self._emit16(0x9800 | (rt << 8) | (imm8w & 0xFF))
+    def movs_rr(self, rd, rm):         self._emit16(0x1C00 | (rm << 3) | rd)
+    def push_lr(self):                 self._emit16(0xB500)
+    def pop_r0_r1(self):               self._emit16(0xBC03)
+    def bx_r1(self):                   self._emit16(0x4708)
     def orrs_(self, rd, rm):           self._emit16(0x4300 | (rm << 3) | rd)
     def ldr_lit(self, rt, value):      # ldr rt,=value  (pooled)
         idx = len(self.pool); self.pool.append(value)
@@ -211,6 +223,23 @@ def build_newcode4():
     code += struct.pack("<6H", *UHD_RPM_ROW)
     return bytes(code)
 
+def build_newcode5():   # at 0x681EE: r4 = rpm (0 already fixed to 1), caller lr at [sp+20] before our push
+    a = Asm(NEWCODE5)
+    a.push_lr(); a.movs_rr(1, 4); a.ldr_sp(2, 24 // 4)
+    a.ldr_lit(0, LOG_3E03); a.bl(F_LOG)
+    a.ldr_lit(0, 0x04205020); a.pop_pc()            # displaced: r0 = 0x04205040 - 0x20
+    return a.finish()
+
+def build_newcode6():   # at 0x2FF08: r0 = clock value, caller lr at [sp+4] before our push
+    a = Asm(NEWCODE6)
+    a.push_r0_lr(); a.movs_rr(1, 0); a.ldr_sp(2, 12 // 4)
+    a.ldr_lit(0, LOG_3E04); a.bl(F_LOG)
+    a.pop_r0_r1()                                    # r0 = value, r1 = return addr (0x2FF0D)
+    a.cmp_imm(0, 0); a.bne("ret")                    # displaced: cmp r0,#0 ; beq 0x2FF86
+    a.ldr_lit(1, 0x2FF86 | 1)
+    a.label("ret"); a.bx_r1()
+    return a.finish()
+
 def thumb_bl_bytes(site, target):
     off = target - (site + 4)
     S = (off >> 24) & 1; i1 = (off >> 23) & 1; i2 = (off >> 22) & 1
@@ -262,6 +291,17 @@ def main():
         assert NEWCODE4 >= NEWCODE3 + 0x24, "NEWCODE4 overlaps NEWCODE3"
         img[HOOK4_SITE:HOOK4_SITE+4] = thumb_bl_bytes(HOOK4_SITE, NEWCODE4)
         img[NEWCODE4:NEWCODE4+len(code4)] = code4
+    if TRACE:
+        assert bytes(img[HOOK5_SITE:HOOK5_SITE+4]) == bytes.fromhex("bc482038"), "hook5 bytes changed"
+        assert bytes(img[HOOK6_SITE:HOOK6_SITE+4]) == bytes.fromhex("00283cd0"), "hook6 bytes changed"
+        assert struct.unpack_from("<I", img, ((HOOK5_SITE+4)&~3) + 0xbc*4)[0] == 0x04205040, "hook5 literal"
+        code5 = build_newcode5(); code6 = build_newcode6()
+        assert NEWCODE5 >= NEWCODE4 + 0x44 and NEWCODE6 >= NEWCODE5 + len(code5), "trace stubs overlap"
+        for at, c in ((NEWCODE5, code5), (NEWCODE6, code6)):
+            assert img[at:at+len(c)] == b"\xFF"*len(c), f"free space at {at:#x} not FF"
+            img[at:at+len(c)] = c
+        img[HOOK5_SITE:HOOK5_SITE+4] = thumb_bl_bytes(HOOK5_SITE, NEWCODE5)
+        img[HOOK6_SITE:HOOK6_SITE+4] = thumb_bl_bytes(HOOK6_SITE, NEWCODE6)
     # re-sign
     signed = cmac.resign(bytes(img))
     # verify integrity
@@ -271,7 +311,7 @@ def main():
     # write out
     outdir = os.path.join(os.path.dirname(DUMP), "..", "out"); outdir = os.path.abspath(outdir)
     os.makedirs(outdir, exist_ok=True)
-    outp = os.path.join(outdir, "patched-v3c.bin" if UHD_SPEED else "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
+    outp = os.path.join(outdir, "patched-v3d.bin" if TRACE else "patched-v3c.bin" if UHD_SPEED else "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
     open(outp, "wb").write(signed)
     print("wrote", outp, len(signed), "bytes; CALL_102B52 =", CALL_102B52, "BIT18 =", BIT18)
     # disassemble patched regions for review
@@ -289,6 +329,11 @@ def main():
         print(f"\n=== hook4 @0x{HOOK4_SITE:06x} / NEWCODE4 @0x{NEWCODE4:06x} ({len(code4)} bytes; row {[hex(x) for x in UHD_RPM_ROW]}) ===")
         for i in md.disasm(signed[HOOK4_SITE:HOOK4_SITE+4], HOOK4_SITE): print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
         for i in md.disasm(code4, NEWCODE4): print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
+    if TRACE:
+        for nm, hs, nc, c in (("hook5 rpm-trace", HOOK5_SITE, NEWCODE5, code5), ("hook6 clock-trace", HOOK6_SITE, NEWCODE6, code6)):
+            print(f"\n=== {nm} @0x{hs:06x} -> 0x{nc:06x} ({len(c)} bytes) ===")
+            for i in md.disasm(signed[hs:hs+4], hs): print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
+            for i in md.disasm(c, nc): print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
     if BIT18:
         print(f"\n=== v2 hook @0x{HOOK2_SITE:06x} ===")
         for i in md.disasm(signed[HOOK2_SITE:HOOK2_SITE+4], HOOK2_SITE):
