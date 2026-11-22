@@ -96,6 +96,13 @@ _UHD59 = [0x625, 0xC1C, 0xE60, 0x1305, 0x17E2, 0x1C17]
 TRACE       = False
 HOOK5_SITE  = 0x681EE;  NEWCODE5 = 0x1A9D10;  LOG_3E03 = 0x3E0308FA
 HOOK6_SITE  = 0x2FF08;  NEWCODE6 = 0x1A9D40;  LOG_3E04 = 0x3E0408FA
+# v3e "class-1 density fix" (2026-11-21): MT1939's triple-layer rpm row 0x1A70B4 (used by the ID speed-set
+# 0x105174 and the rpm getter at 0x104E2A for (type&0xCC)==0xC8) is density-compensated only at class 0
+# (0x625/0x834 = 0.749 = 25/33.4). Class 1 (speed 4, which the disc-ID handler hard-codes for DI attempts)
+# is 0xC1C/0xD48 = 0.91. Set class 1 to 0xD48*0.749 = 0x9F3 (2547 rpm) there and in NEWCODE4's row.
+CLASS1_FIX  = False
+TL_ROW      = 0x1A70B4
+CLASS1_RPM  = 0x9F3
 UHD_RPM_ROW = [u if a == b else round(a * u / b) for a, b, u in zip(_STD39, _STD59, _UHD59)]
 
 # ---- tiny Thumb assembler (only the ops this routine needs) -----------------
@@ -204,6 +211,8 @@ def build_newcode3():
     return a.finish()
 
 def build_newcode4():
+    row = list(UHD_RPM_ROW)
+    if CLASS1_FIX: row[1] = CLASS1_RPM
     a = Asm(NEWCODE4)
     a.push_r0_lr()                                   # [sp]=rpm, [sp+4]=lr (return to 0x104424)
     a.ldr_lit(2, TYPE_ADDR); a.ldrb_imm(2, 2); a.cmp_imm(2, 0xC8); a.bne("log")
@@ -220,7 +229,7 @@ def build_newcode4():
     # fix the placeholder literal (first pool entry with value 0) to point at the row
     pool_start = len(code) - 4 * len(a.pool)
     idx = a.pool.index(0); struct.pack_into("<I", code, pool_start + 4 * idx, row_addr)
-    code += struct.pack("<6H", *UHD_RPM_ROW)
+    code += struct.pack("<6H", *row)
     return bytes(code)
 
 def build_newcode5():   # at 0x681EE: r4 = rpm (0 already fixed to 1), caller lr at [sp+20] before our push
@@ -291,6 +300,9 @@ def main():
         assert NEWCODE4 >= NEWCODE3 + 0x24, "NEWCODE4 overlaps NEWCODE3"
         img[HOOK4_SITE:HOOK4_SITE+4] = thumb_bl_bytes(HOOK4_SITE, NEWCODE4)
         img[NEWCODE4:NEWCODE4+len(code4)] = code4
+    if CLASS1_FIX:
+        assert struct.unpack_from("<6H", img, TL_ROW) == (0x625, 0xC1C, 0xE60, 0x1305, 0x1768, 0x1C17), "TL row changed"
+        struct.pack_into("<H", img, TL_ROW + 2, CLASS1_RPM)
     if TRACE:
         assert bytes(img[HOOK5_SITE:HOOK5_SITE+4]) == bytes.fromhex("bc482038"), "hook5 bytes changed"
         assert bytes(img[HOOK6_SITE:HOOK6_SITE+4]) == bytes.fromhex("00283cd0"), "hook6 bytes changed"
@@ -311,7 +323,7 @@ def main():
     # write out
     outdir = os.path.join(os.path.dirname(DUMP), "..", "out"); outdir = os.path.abspath(outdir)
     os.makedirs(outdir, exist_ok=True)
-    outp = os.path.join(outdir, "patched-v3d.bin" if TRACE else "patched-v3c.bin" if UHD_SPEED else "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
+    outp = os.path.join(outdir, "patched-v3e.bin" if CLASS1_FIX else "patched-v3d.bin" if TRACE else "patched-v3c.bin" if UHD_SPEED else "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
     open(outp, "wb").write(signed)
     print("wrote", outp, len(signed), "bytes; CALL_102B52 =", CALL_102B52, "BIT18 =", BIT18)
     # disassemble patched regions for review
