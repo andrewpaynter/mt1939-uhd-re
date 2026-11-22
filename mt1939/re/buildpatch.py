@@ -60,6 +60,14 @@ BIT18       = False        # True rebuilds the refuted bit-18 variant (patched-v
 #          "inner-zone mode" (flag 0x02000B17=1: standard-BD config, 27 GB density row, DL-style
 #          addressing) for the DI read. Diagnostic only: tests whether the DI read succeeds (log 11bb).
 PRESSED_TL_TYPE = 0xC8
+# v3b "lock probe" (2026-11-21): for type C8 only, point the first ROM DI read (0xBA01E in 0xB9FB0)
+# at the DATA-ZONE start PSN 0x100000 instead of the DI (PSN 0xD3A00). Diagnostic: does read-ready
+# (0x04206080 bit14, log 11bb) ever set on Dune's pressed 33 GB pits? (MT1959 locks in the data zone
+# first, then trains, then reads the DI.) Use with PRESSED_TL_TYPE=0xC8. C0/C4 discs keep 0xD3A00.
+DI_PROBE_DATAZONE = False
+HOOK3_SITE  = 0xBA01E      # `ldr r0,=0xD3A00 ; ldr r5,=0x02000E1C` (2+2 bytes) -> `bl NEWCODE3`
+NEWCODE3    = 0x1A9C80     # third free-space routine (FF, in rec2)
+PROBE_PSN   = 0x100000
 HOOK2_SITE  = 0xB9FF8      # `bl 0x46c0a` in the ROM read 0xB9FB0, after r0=0x30000
 NEWCODE2    = 0x1A9C60     # second free-space routine (after NEWCODE's 64 B; still FF, in rec2)
 F_46C0A     = 0x46C0A      # writes r0 -> servo reg 0x04030020
@@ -81,6 +89,7 @@ class Asm:
     def strb_imm(self, rt, rn, imm=0): self._emit16(0x7000 | ((imm & 0x1F) << 6) | (rn << 3) | rt)
     def lsls_imm(self, rd, rm, imm):   self._emit16(0x0000 | ((imm & 0x1F) << 6) | (rm << 3) | rd)
     def orrs(self, rd, rm):            self._emit16(0x4300 | (rm << 3) | rd)
+    def bx_lr(self):                   self._emit16(0x4770)
     def ldr_lit(self, rt, value):      # ldr rt,=value  (pooled)
         idx = len(self.pool); self.pool.append(value)
         self.pool_refs.append((len(self.buf), rt, idx)); self._emit16(0x4800 | (rt << 8))
@@ -147,6 +156,15 @@ def build_newcode2():
     a.bl(F_46C0A); a.pop_pc()
     return a.finish()
 
+def build_newcode3():
+    # r0 = (type==C8) ? PROBE_PSN : 0xD3A00 ; r5 = 0x02000E1C ; return (replaces the two ldr's at HOOK3_SITE)
+    a = Asm(NEWCODE3)
+    a.ldr_lit(0, TYPE_ADDR); a.ldrb_imm(0, 0); a.cmp_imm(0, 0xC8); a.bne("std")
+    a.ldr_lit(0, PROBE_PSN); a.b("done")
+    a.label("std"); a.ldr_lit(0, 0x000D3A00)
+    a.label("done"); a.ldr_lit(5, 0x02000E1C); a.bx_lr()
+    return a.finish()
+
 def thumb_bl_bytes(site, target):
     off = target - (site + 4)
     S = (off >> 24) & 1; i1 = (off >> 23) & 1; i2 = (off >> 22) & 1
@@ -178,6 +196,17 @@ def main():
         assert NEWCODE2 >= NEWCODE + len(code), "NEWCODE2 overlaps NEWCODE"
         img[HOOK2_SITE:HOOK2_SITE+4] = thumb_bl_bytes(HOOK2_SITE, NEWCODE2)
         img[NEWCODE2:NEWCODE2+len(code2)] = code2
+    code3 = None
+    if DI_PROBE_DATAZONE:
+        assert PRESSED_TL_TYPE == 0xC8 and not BIT18, "v3b = v1 (C8) + probe only"
+        h3 = bytes(img[HOOK3_SITE:HOOK3_SITE+4])
+        assert struct.unpack_from("<I", img, ((HOOK3_SITE+4)&~3) + (h3[0])*4)[0] == 0x000D3A00 and h3[1] == 0x48, "hook3 ldr r0 mismatch"
+        assert h3[3] == 0x4D and struct.unpack_from("<I", img, ((HOOK3_SITE+2+4)&~3) + (h3[2])*4)[0] == 0x02000E1C, "hook3 ldr r5 mismatch"
+        code3 = build_newcode3()
+        assert img[NEWCODE3:NEWCODE3+len(code3)] == b"\xFF"*len(code3), "NEWCODE3 free space not FF"
+        assert NEWCODE3 >= NEWCODE + len(code), "NEWCODE3 overlaps NEWCODE"
+        img[HOOK3_SITE:HOOK3_SITE+4] = thumb_bl_bytes(HOOK3_SITE, NEWCODE3)
+        img[NEWCODE3:NEWCODE3+len(code3)] = code3
     # re-sign
     signed = cmac.resign(bytes(img))
     # verify integrity
@@ -187,7 +216,7 @@ def main():
     # write out
     outdir = os.path.join(os.path.dirname(DUMP), "..", "out"); outdir = os.path.abspath(outdir)
     os.makedirs(outdir, exist_ok=True)
-    outp = os.path.join(outdir, "patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin"))
+    outp = os.path.join(outdir, "patched-v3b.bin" if DI_PROBE_DATAZONE else ("patched-v3a.bin" if PRESSED_TL_TYPE == 0xC4 else ("patched-v2.bin" if BIT18 else "patched.bin")))
     open(outp, "wb").write(signed)
     print("wrote", outp, len(signed), "bytes; CALL_102B52 =", CALL_102B52, "BIT18 =", BIT18)
     # disassemble patched regions for review
@@ -197,6 +226,10 @@ def main():
     print(f"\n=== NEWCODE @0x{NEWCODE:06x} ({len(code)} bytes) ===")
     for i in md.disasm(code, NEWCODE):
         print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
+    if code3:
+        print(f"\n=== hook3 @0x{HOOK3_SITE:06x} / NEWCODE3 @0x{NEWCODE3:06x} ({len(code3)} bytes) ===")
+        for i in md.disasm(signed[HOOK3_SITE:HOOK3_SITE+4], HOOK3_SITE): print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
+        for i in md.disasm(code3, NEWCODE3): print(f"  {i.address:06x}: {i.bytes.hex():<8} {i.mnemonic} {i.op_str}")
     if BIT18:
         print(f"\n=== v2 hook @0x{HOOK2_SITE:06x} ===")
         for i in md.disasm(signed[HOOK2_SITE:HOOK2_SITE+4], HOOK2_SITE):
